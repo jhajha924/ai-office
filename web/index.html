@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Every data-text / data-text-label is filled from web/src/text.ts at start-up. -->
+    <title data-text="pageTitle">AI 辦公室</title>
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand" data-text="brand">AI 辦公室</div>
+      <nav id="tabs" class="tabs" data-text-label="floorsLabel"></nav>
+      <div id="stats" class="stats" aria-live="polite"></div>
+    </header>
+    <main class="layout">
+      <section id="office" class="office" data-text-label="officeLabel">
+        <div id="empty" class="empty" data-text="empty" hidden></div>
+        <div id="offline" class="offline" data-text="offline" hidden></div>
+      </section>
+      <aside class="sidebar" data-text-label="sidebarLabel">
+        <div class="columns">
+          <div id="col-needs" class="col needs"><h2><span data-text="colNeeds"></span> <span class="count">0</span></h2><ul></ul></div>
+          <div id="col-working" class="col working"><h2><span data-text="colWorking"></span> <span class="count">0</span></h2><ul></ul></div>
+          <div id="col-done" class="col done"><h2><span data-text="colDone"></span> <span class="count">0</span></h2><ul></ul></div>
+          <p id="overflow" class="overflow" hidden></p>
+        </div>
+        <section class="feed" data-text-label="feedLabel">
+          <h2 data-text="feedTitle"></h2>
+          <ul id="feed"></ul>
+        </section>
+      </aside>
+    </main>
+    <footer id="cards" class="cards" data-text-label="cardsLabel" hidden></footer>
+    <svg id="arcs" class="arcs" aria-hidden="true"></svg>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

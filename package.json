@@ -1,0 +1,31 @@
+{
+  "name": "ai-office",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI 辦公室：把本機的 Claude Code 對話畫成 3D 等角辦公室（只在本機）",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node server/src/main.ts",
+    "demo": "node server/src/main.ts --demo",
+    "build": "vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "hook:install": "node hook/install.ts install",
+    "hook:uninstall": "node hook/install.ts uninstall",
+    "check:public": "node scripts/check-public.mjs"
+  },
+  "dependencies": {
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/three": "0.170.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.1",
+    "vitest": "3.2.4"
+  },
+  "license": "MIT"
+}

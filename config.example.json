@@ -1,0 +1,18 @@
+{
+  "floors": {
+    "rules": [
+      { "prefix": "C:\\Projects\\work\\", "floor": "工作樓", "mask": true }
+    ],
+    "default": { "floor": "私人樓", "mask": false }
+  },
+  "roster": {
+    "names": ["阿哲", "小安", "阿凱", "小芸", "阿翔", "小婷", "阿傑", "小涵"]
+  },
+  "timing": {
+    "stuckRunningMs": 600000,
+    "stuckThinkingMs": 480000,
+    "idleAfterDoneMs": 180000,
+    "dozeAfterIdleMs": 900000,
+    "groupLeaveMs": 1800000
+  }
+}
