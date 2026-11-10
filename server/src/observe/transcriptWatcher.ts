@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import type { ConfigSource, OfficeConfig } from '../office/config.ts';
-import { floorForSession } from '../office/floorRouting.ts';
+import { buildingForSession } from '../office/floorRouting.ts';
 import { firstUserMessage, LABEL_HEAD_LINES, latestTitle, shortenLabel } from '../office/groupLabel.ts';
 import type { OfficeStore } from '../office/store.ts';
 import { mainActorId } from '../office/types.ts';
@@ -21,7 +21,7 @@ import { parseLine } from './transcriptParser.ts';
  * before decoding, so a multi-byte character cut by a read is never mangled.
  *
  * Nothing here opens a file for writing. The projects' own folders (the
- * sessions' cwd) are never read, with one exception on unmasked floors only:
+ * sessions' cwd) are never read, with one exception on unmasked buildings only:
  * the tasks.md of the change a session works on, for its progress bar.
  */
 
@@ -50,7 +50,7 @@ interface FileState {
   headTitle?: string;
   firstMessage?: string;
   labelTriedAt: number;
-  /** The first cwd of the transcript has been found (it fixes the floor). */
+  /** The first cwd of the transcript has been found (it fixes the building). */
   homeKnown: boolean;
   /** The change the session was last seen working on. */
   change?: ChangeHint;
@@ -182,7 +182,7 @@ export class TranscriptWatcher {
         homeKnown: false,
       };
       this.files.set(file, state);
-      // Until the head is read, the project folder name decides the floor.
+      // Until the head is read, the project folder name decides the building.
       this.opts.store.setHome(sessionId, { projectDir: path.basename(path.dirname(file)) });
     }
     if (stat.size < state.offset) {
@@ -193,7 +193,7 @@ export class TranscriptWatcher {
     }
     if (stat.size > state.offset) {
       // The start cwd goes in before any event, so no view ever shows the
-      // session on a floor decided by a later cwd.
+      // session on a building decided by a later cwd.
       if (!state.homeKnown) {
         const cwd = firstCwd(await readHeadLines(file));
         if (cwd) {
@@ -221,13 +221,13 @@ export class TranscriptWatcher {
 
   /**
    * Re-reads the tasks.md of the session's current change when it moved, and
-   * reports the ratio as a progress event. Masked floors never get here past
-   * the floor check: their project files are never read.
+   * reports the ratio as a progress event. Masked buildings never get here past
+   * the building check: their project files are never read.
    */
   private async updateProgress(state: FileState, now: number, config: OfficeConfig): Promise<void> {
     if (!state.change) return;
     const home = this.opts.store.homes.get(state.sessionId);
-    if (floorForSession(home, state.lastCwd, config).mask) return;
+    if (buildingForSession(home, state.lastCwd, config).mask) return;
     const file = tasksPath(state.change, home?.cwd ?? state.lastCwd);
     const read = await readProgress(file, state.progressStamp);
     if (!read) return;

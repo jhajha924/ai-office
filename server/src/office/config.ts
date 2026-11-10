@@ -1,27 +1,28 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { DepartmentTheme } from './types.ts';
 
 /**
- * Office settings: floor rules, the staff roster and timing thresholds.
+ * Office settings: building rules, the staff roster and timing thresholds.
  *
  * Read from ~/.ai-office/config.json, never written. A missing key takes its
  * built-in default, but any present key with the wrong shape makes the whole
  * file fall back to the built-in defaults, so a half-valid file can never
- * route sessions to a floor nobody configured.
+ * route sessions to a building nobody configured.
  */
 
-export interface FloorRule {
+export interface BuildingRule {
   /** Path prefix, matched on folder boundaries after normalization. */
   prefix: string;
-  /** Floor name the matching sessions are shown on. */
-  floor: string;
+  /** Building name the matching sessions are shown on. */
+  building: string;
   /** Hide file names, commands and subtask descriptions in status bubbles. */
   mask: boolean;
 }
 
-export interface FloorTarget {
-  floor: string;
+export interface BuildingTarget {
+  building: string;
   mask: boolean;
 }
 
@@ -57,25 +58,44 @@ export interface ObserveSettings {
   sources: string[];
 }
 
+/** A department: one floor of every building, holding the sessions whose current skill is one of its skills. */
+export interface Department {
+  id: string;
+  name: string;
+  /** 3 and up: floors 1 and 2 are the lobby and the managers' floor. */
+  floor: number;
+  skills: string[];
+  /** How its floor looks; when omitted, see levelList. */
+  theme?: DepartmentTheme;
+}
+
+/** The five department styles, in the order departments without a theme take them. */
+export const DEPARTMENT_THEMES: readonly DepartmentTheme[] = ['analysis', 'spec', 'build', 'qa', 'release'];
+
+/** The lowest and highest floor a department can be on. */
+export const DEPARTMENT_FLOOR_MIN = 3;
+export const DEPARTMENT_FLOOR_MAX = 99;
+
 export interface OfficeConfig {
-  floors: { rules: FloorRule[]; default: FloorTarget };
+  buildings: { rules: BuildingRule[]; default: BuildingTarget };
   roster: Roster;
-  /** Per-floor title overrides, keyed by floor name. */
-  floorOverrides: Record<string, Partial<RosterTitles>>;
+  /** Per-building title overrides, keyed by building name. */
+  buildingOverrides: Record<string, Partial<RosterTitles>>;
   groupLabelMaxChars: number;
   timing: Timing;
   observe: ObserveSettings;
+  departments: Department[];
   port?: number;
 }
 
 const MINUTE = 60_000;
 
 export const DEFAULT_CONFIG: OfficeConfig = {
-  floors: {
+  buildings: {
     // No one's folders are built in: without a config file every session
-    // shares one unmasked floor. config.example.json shows two floors.
+    // shares one unmasked building. config.example.json shows two buildings.
     rules: [],
-    default: { floor: '辦公室', mask: false },
+    default: { building: '辦公室', mask: false },
   },
   roster: {
     subagents: { Explore: '資料調查員', Plan: '系統架構師', 'general-purpose': '支援專員' },
@@ -94,7 +114,7 @@ export const DEFAULT_CONFIG: OfficeConfig = {
     fallbackSkill: '{name} 專員',
     names: ['阿哲', '小安', '阿凱', '小芸', '阿翔', '小婷', '阿傑', '小涵', '阿豪', '小琪', '阿宏', '小萱', '阿偉', '小晴', '阿明', '小雯', '阿誠', '小柔', '阿宇', '小瑜', '阿昇', '小蓁', '阿峰', '小綾', '阿正', '小慧', '阿廷', '小薇', '阿勳', '小芃', '阿睿', '小嵐', '阿霖', '小妍', '阿璋', '小葳', '阿杰', '小恩', '阿彥', '小筑'],
   },
-  floorOverrides: {},
+  buildingOverrides: {},
   groupLabelMaxChars: 15,
   timing: {
     stuckRunningMs: 10 * MINUTE,
@@ -104,6 +124,28 @@ export const DEFAULT_CONFIG: OfficeConfig = {
     groupLeaveMs: 30 * MINUTE,
   },
   observe: { sources: ['claude-code'] },
+  departments: [
+    { id: 'analysis', name: '需求分析組', floor: 3, skills: ['speclink-discuss', 'spectra-discuss'] },
+    {
+      id: 'spec',
+      name: '規格企劃組',
+      floor: 4,
+      skills: ['speclink-propose', 'speclink-ingest', 'spectra-propose', 'spectra-ingest'],
+    },
+    { id: 'build', name: '工程組', floor: 5, skills: ['speclink-apply', 'spectra-apply'] },
+    {
+      id: 'qa',
+      name: '測試品管組',
+      floor: 6,
+      skills: ['speclink-review', 'speclink-verify', 'speclink-audit', 'speclink-quality', 'spectra-verify', 'spectra-audit'],
+    },
+    {
+      id: 'release',
+      name: '文件發佈組',
+      floor: 7,
+      skills: ['speclink-archive', 'speclink-commit', 'spectra-archive', 'spectra-commit'],
+    },
+  ],
 };
 
 /** Thrown internally when a present key has the wrong shape. */
@@ -134,26 +176,36 @@ function stringMap(value: unknown, field: string): Record<string, string> {
   return out;
 }
 
-function parseFloorTarget(value: unknown, field: string): FloorTarget {
+/**
+ * The config file names buildings with the keys `buildings` / `building`; the
+ * older keys `floors` / `floor` (from before buildings had floors of their
+ * own) are still read when the new ones are absent.
+ */
+type BuildingKeys = { section: 'buildings'; name: 'building' } | { section: 'floors'; name: 'floor' };
+const NEW_KEYS: BuildingKeys = { section: 'buildings', name: 'building' };
+const OLD_KEYS: BuildingKeys = { section: 'floors', name: 'floor' };
+
+function parseBuildingTarget(value: unknown, field: string, keys: BuildingKeys): BuildingTarget {
   if (!isPlainObject(value)) throw new ShapeError(field);
   if (typeof value.mask !== 'boolean') throw new ShapeError(`${field}.mask`);
-  return { floor: nonEmptyString(value.floor, `${field}.floor`), mask: value.mask };
+  return { building: nonEmptyString(value[keys.name], `${field}.${keys.name}`), mask: value.mask };
 }
 
-function parseFloors(value: unknown): OfficeConfig['floors'] {
-  const defaults = DEFAULT_CONFIG.floors;
+function parseBuildings(value: unknown, keys: BuildingKeys): OfficeConfig['buildings'] {
+  const defaults = DEFAULT_CONFIG.buildings;
+  const at = keys.section;
   if (value === undefined) return defaults;
-  if (!isPlainObject(value)) throw new ShapeError('floors');
+  if (!isPlainObject(value)) throw new ShapeError(at);
   let rules = defaults.rules;
   if (value.rules !== undefined) {
-    if (!Array.isArray(value.rules)) throw new ShapeError('floors.rules');
+    if (!Array.isArray(value.rules)) throw new ShapeError(`${at}.rules`);
     rules = value.rules.map((rule, i) => ({
-      ...parseFloorTarget(rule, `floors.rules[${i}]`),
-      prefix: nonEmptyString((rule as Record<string, unknown>).prefix, `floors.rules[${i}].prefix`),
+      ...parseBuildingTarget(rule, `${at}.rules[${i}]`, keys),
+      prefix: nonEmptyString((rule as Record<string, unknown>).prefix, `${at}.rules[${i}].prefix`),
     }));
   }
   const fallback =
-    value.default === undefined ? defaults.default : parseFloorTarget(value.default, 'floors.default');
+    value.default === undefined ? defaults.default : parseBuildingTarget(value.default, `${at}.default`, keys);
   return { rules, default: fallback };
 }
 
@@ -179,20 +231,20 @@ function nameList(value: unknown): string[] {
   return value.map((name, i) => nonEmptyString(name, `roster.names[${i}]`));
 }
 
-function parseFloorOverrides(value: unknown): OfficeConfig['floorOverrides'] {
-  if (value === undefined) return DEFAULT_CONFIG.floorOverrides;
-  if (!isPlainObject(value)) throw new ShapeError('floorOverrides');
-  const out: OfficeConfig['floorOverrides'] = {};
-  for (const [floor, titles] of Object.entries(value)) {
-    if (!isPlainObject(titles)) throw new ShapeError(`floorOverrides.${floor}`);
+function parseBuildingOverrides(value: unknown, at: 'buildingOverrides' | 'floorOverrides'): OfficeConfig['buildingOverrides'] {
+  if (value === undefined) return DEFAULT_CONFIG.buildingOverrides;
+  if (!isPlainObject(value)) throw new ShapeError(at);
+  const out: OfficeConfig['buildingOverrides'] = {};
+  for (const [building, titles] of Object.entries(value)) {
+    if (!isPlainObject(titles)) throw new ShapeError(`${at}.${building}`);
     const entry: Partial<RosterTitles> = {};
     if (titles.subagents !== undefined) {
-      entry.subagents = stringMap(titles.subagents, `floorOverrides.${floor}.subagents`);
+      entry.subagents = stringMap(titles.subagents, `${at}.${building}.subagents`);
     }
     if (titles.skills !== undefined) {
-      entry.skills = stringMap(titles.skills, `floorOverrides.${floor}.skills`);
+      entry.skills = stringMap(titles.skills, `${at}.${building}.skills`);
     }
-    out[floor] = entry;
+    out[building] = entry;
   }
   return out;
 }
@@ -220,19 +272,60 @@ function parseObserve(value: unknown): ObserveSettings {
   return { sources: value.sources.map((id, i) => nonEmptyString(id, `observe.sources[${i}]`)) };
 }
 
+function parseDepartments(value: unknown): Department[] {
+  if (value === undefined) return DEFAULT_CONFIG.departments;
+  if (!Array.isArray(value)) throw new ShapeError('departments');
+  const ids = new Set<string>();
+  const floors = new Set<number>();
+  const skills = new Set<string>();
+  return value.map((item, i) => {
+    const at = `departments[${i}]`;
+    if (!isPlainObject(item)) throw new ShapeError(at);
+    const id = nonEmptyString(item.id, `${at}.id`);
+    const name = nonEmptyString(item.name, `${at}.name`);
+    const floor = item.floor;
+    if (typeof floor !== 'number' || !Number.isInteger(floor) || floor < DEPARTMENT_FLOOR_MIN || floor > DEPARTMENT_FLOOR_MAX) {
+      throw new ShapeError(`${at}.floor`);
+    }
+    if (!Array.isArray(item.skills) || item.skills.length === 0) throw new ShapeError(`${at}.skills`);
+    const own = item.skills.map((skill, j) => nonEmptyString(skill, `${at}.skills[${j}]`));
+    if (ids.has(id)) throw new ShapeError(`${at}.id`);
+    if (floors.has(floor)) throw new ShapeError(`${at}.floor`);
+    for (const [j, skill] of own.entries()) {
+      if (skills.has(skill)) throw new ShapeError(`${at}.skills[${j}]`);
+      skills.add(skill);
+    }
+    let theme: DepartmentTheme | undefined;
+    if (item.theme !== undefined) {
+      if (typeof item.theme !== 'string' || !(DEPARTMENT_THEMES as readonly string[]).includes(item.theme)) {
+        throw new ShapeError(`${at}.theme`);
+      }
+      theme = item.theme as DepartmentTheme;
+    }
+    ids.add(id);
+    floors.add(floor);
+    return { id, name, floor, skills: own, ...(theme ? { theme } : {}) };
+  });
+}
+
 /** Validate a parsed config.json. Throws ShapeError naming the first bad field. */
 export function parseConfig(raw: unknown): OfficeConfig {
   if (!isPlainObject(raw)) throw new ShapeError('(root)');
   const config: OfficeConfig = {
-    floors: parseFloors(raw.floors),
+    buildings:
+      raw.buildings !== undefined ? parseBuildings(raw.buildings, NEW_KEYS) : parseBuildings(raw.floors, OLD_KEYS),
     roster: parseRoster(raw.roster),
-    floorOverrides: parseFloorOverrides(raw.floorOverrides),
+    buildingOverrides:
+      raw.buildingOverrides !== undefined
+        ? parseBuildingOverrides(raw.buildingOverrides, 'buildingOverrides')
+        : parseBuildingOverrides(raw.floorOverrides, 'floorOverrides'),
     groupLabelMaxChars:
       raw.groupLabelMaxChars === undefined
         ? DEFAULT_CONFIG.groupLabelMaxChars
         : positiveInt(raw.groupLabelMaxChars, 'groupLabelMaxChars'),
     timing: parseTiming(raw.timing),
     observe: parseObserve(raw.observe),
+    departments: parseDepartments(raw.departments),
   };
   if (raw.port !== undefined) {
     const port = positiveInt(raw.port, 'port');

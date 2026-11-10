@@ -5,15 +5,24 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
-import type { ActorStatus, ActorView, GroupView, OfficeView } from '../../../server/src/office/types.ts';
+import type { ActorStatus, ActorView, FloorTheme, GroupView, OfficeView } from '../../../server/src/office/types.ts';
+import type { BoardContent } from '../board.ts';
+import { WarBoard } from './board.ts';
 import type { Phase } from './daylight.ts';
 import { LIGHTING } from './daylight.ts';
 import { choosePoi, dwellMs } from './idleLife.ts';
 import type { Cell, Facing, Furniture } from './layout.ts';
-import { blockedCells, cellKey, DOOR, FURNITURE, GRID_H, GRID_W, PING_PONG, PODS, POIS, ZONES } from './layout.ts';
+import { cellKey, DOOR, ELEVATOR, GRID_H, GRID_W } from './layout.ts';
+import type { FloorPlan } from './floorPlans.ts';
+import { blockedCells, PLANS } from './floorPlans.ts';
+import { buildProp } from './props.ts';
 import { findPath } from './pathfinding.ts';
 import { placeFor, PodAllocator } from './podAllocator.ts';
+import type { LevelChoice } from '../levels.ts';
+import { overviewTagText } from '../levels.ts';
 import { TEXT } from '../text.ts';
+import type { Slab } from './overview.ts';
+import { FLOOR_GAP, Overview, OVERVIEW_POLAR } from './overview.ts';
 
 /**
  * The 3D isometric office. Turns OfficeView into characters at desks: one pod
@@ -46,7 +55,13 @@ interface Place {
 
 interface Visual {
   id: string;
-  floor: string;
+  building: string;
+  /** The floor the character is on now (during a ride: the one it is leaving). */
+  level: number;
+  /** On its way to the elevator: the floor and seat to go to once there. */
+  transfer?: { level: number; seat: Place };
+  /** Riding the shaft in the whole-building view: heights and progress (0..1). */
+  ride?: { from: number; to: number; t: number };
   obj: THREE.Object3D;
   mixer: THREE.AnimationMixer;
   actions: Record<string, THREE.AnimationAction>;
@@ -60,10 +75,22 @@ interface Visual {
   /** While idle: when to move on from the current point of interest. */
   wanderUntil?: number;
   leaving: boolean;
+  /** Scale that makes the model CHAR_HEIGHT tall on a single floor. */
+  scale: number;
   tag: CSS2DObject;
   tagEl: HTMLDivElement;
   tagKey: string;
 }
+
+/** Where people come in and go out: the door on the lobby, the elevator everywhere else. */
+const entranceOf = (level: number): Cell => (level === 1 ? DOOR : ELEVATOR);
+/** Models every desk kit may use, loaded with the furniture. */
+const DESK_MODELS = ['desk', 'chairDesk', 'computerScreen', 'computerKeyboard', 'laptop', 'books'];
+/** A phone lying on a desk (the testers' floor). */
+const PHONE_GEOMETRY = new THREE.BoxGeometry(0.12, 0.015, 0.22);
+const PHONE_MATERIAL = new THREE.MeshStandardMaterial({ color: 0x111827, emissive: 0x38bdf8, emissiveIntensity: 0.25 });
+/** How much larger characters are in the whole-building view. */
+const OVERVIEW_CHARACTER_SCALE = 1.6;
 
 const cellCenter = (c: Cell, y = 0) => new THREE.Vector3(c.x + 0.5, y, c.z + 0.5);
 const samePlace = (a: Place | undefined, b: Place | undefined) => !!a && !!b && a.x === b.x && a.z === b.z;
@@ -85,9 +112,26 @@ export class Office {
   private models: Record<string, THREE.Object3D> = {};
   private characters: { scene: THREE.Object3D; animations: THREE.AnimationClip[] }[] = [];
   private visuals = new Map<string, Visual>();
-  private allocators = new Map<string, PodAllocator>();
-  private blocked = blockedCells();
-  private floor = '';
+  private allocators = new Map<string, { theme: FloorTheme; alloc: PodAllocator }>();
+  /** Cells nobody walks through, per floor plan. */
+  private blocked = new Map<FloorTheme, Set<string>>();
+  /** The theme of each floor of each building ("building#level"), from the view. */
+  private themes = new Map<string, FloorTheme>();
+  private building = '';
+  /** The room name of the floor on screen. */
+  private room = '';
+  /** The whole building, or one floor. */
+  private level: LevelChoice = 1;
+  /** The one-floor scenes, one per floor theme (built when first needed); only the one on screen shows. */
+  private floors = new Map<FloorTheme, { group: THREE.Group; room?: HTMLDivElement }>();
+  private floorRoot = new THREE.Group();
+  /** The theme of the floor on screen. */
+  private theme: FloorTheme = 'lobby';
+  /** The lobby's war-room board: one picture shared by every lobby. */
+  private warBoard = new WarBoard();
+  private overview = new Overview();
+  /** Called when a slab is clicked in the whole-building view. */
+  onPickLevel?: (level: number) => void;
   private synced = false;
   private loadFailed = false;
   private focus?: { from: THREE.Vector3; to: THREE.Vector3; t: number };
@@ -157,7 +201,9 @@ export class Office {
       this.scene.add(lamp);
     }
 
-    this.buildRoom();
+    this.scene.add(this.floorRoot, this.overview.root);
+    this.overview.root.visible = false;
+    this.listenForSlabClicks();
     window.addEventListener('resize', () => this.resize());
     this.resize();
     this.ready = this.load().catch((err: unknown) => {
@@ -177,7 +223,7 @@ export class Office {
     const loader = new GLTFLoader();
     loader.setMeshoptDecoder(MeshoptDecoder);
     const get = (url: string) => loader.loadAsync(url);
-    const names = [...new Set([...FURNITURE.map((f) => f.model), 'desk', 'chairDesk', 'computerScreen', 'computerKeyboard', 'rugRectangle'])];
+    const names = [...new Set([...Object.values(PLANS).flatMap((plan) => plan.furniture.map((f) => f.model)), ...DESK_MODELS])];
     const [chars, furniture] = await Promise.all([
       Promise.all(CHARACTERS.map((c) => get(`/assets/kenney/characters/character-${c}.glb`))),
       Promise.all(names.map((n) => get(`/assets/kenney/furniture/${n}.glb`).then((g) => [n, g.scene] as const))),
@@ -192,11 +238,13 @@ export class Office {
       });
       this.models[name] = model;
     }
-    this.furnish();
+    // Every floor of the whole-building view gets the furniture of its own theme.
+    this.overview.setTemplates((theme) => this.floorScene(theme).group);
+    this.showFloor();
   }
 
   /** Place a model so its footprint fills (x, z, w, d), standing on y0. */
-  private place(f: Furniture): THREE.Object3D | undefined {
+  private place(f: Furniture, parent: THREE.Object3D): THREE.Object3D | undefined {
     const src = this.models[f.model];
     if (!src) return undefined;
     const m = src.clone(true);
@@ -210,12 +258,28 @@ export class Office {
     box = new THREE.Box3().setFromObject(m);
     const c = box.getCenter(new THREE.Vector3());
     m.position.set(f.x + f.w / 2 - c.x, (f.y0 ?? 0) - box.min.y, f.z + f.d / 2 - c.z);
-    this.scene.add(m);
+    parent.add(m);
     return m;
   }
 
-  private buildRoom(): void {
-    for (const zone of ZONES) {
+  /** The one-floor scene of a theme, built the first time it is needed (models must be loaded). */
+  private floorScene(theme: FloorTheme): { group: THREE.Group; room?: HTMLDivElement } {
+    let floor = this.floors.get(theme);
+    if (!floor) {
+      floor = this.buildFloor(PLANS[theme]);
+      floor.group.visible = false;
+      this.floorRoot.add(floor.group);
+      this.floors.set(theme, floor);
+    }
+    return floor;
+  }
+
+  /** Tiles, walls, equipment, elevator and furniture of one floor plan. */
+  private buildFloor(plan: FloorPlan): { group: THREE.Group; room?: HTMLDivElement } {
+    const group = new THREE.Group();
+    group.name = `floor:${plan.theme}`;
+    let room: HTMLDivElement | undefined;
+    for (const zone of plan.zones) {
       const tile = new THREE.Mesh(
         new THREE.PlaneGeometry(zone.w, zone.d),
         new THREE.MeshStandardMaterial({ color: zone.color, roughness: 0.95 }),
@@ -223,82 +287,76 @@ export class Office {
       tile.rotation.x = -Math.PI / 2;
       tile.position.set(zone.x + zone.w / 2, 0, zone.z + zone.d / 2);
       tile.receiveShadow = true;
-      this.scene.add(tile);
+      group.add(tile);
 
       const el = document.createElement('div');
       el.className = 'zone-label';
       el.textContent = zone.name;
+      if (zone.room) room = el;
       const label = new CSS2DObject(el);
       label.position.set(zone.x + 0.6, 0.02, zone.z + 0.4);
       label.center.set(0, 0);
-      this.scene.add(label);
+      group.add(label);
     }
-    // The aisle column between the desk area and the rooms.
-    const aisle = new THREE.Mesh(new THREE.PlaneGeometry(1, GRID_H), new THREE.MeshStandardMaterial({ color: 0xd8d1c4 }));
+    // The aisle column between the work area and the rooms.
+    const aisle = new THREE.Mesh(new THREE.PlaneGeometry(1, GRID_H), new THREE.MeshStandardMaterial({ color: plan.aisleColor }));
     aisle.rotation.x = -Math.PI / 2;
     aisle.position.set(13.5, -0.001, GRID_H / 2);
     aisle.receiveShadow = true;
-    this.scene.add(aisle);
+    group.add(aisle);
 
     const grid = new THREE.GridHelper(GRID_W, GRID_W, 0xcfc8ba, 0xcfc8ba);
     grid.scale.set(1, 1, GRID_H / GRID_W);
     grid.position.set(GRID_W / 2, 0.002, GRID_H / 2);
-    (grid.material as THREE.Material).opacity = 0.35;
+    (grid.material as THREE.Material).opacity = 0.25;
     (grid.material as THREE.Material).transparent = true;
-    this.scene.add(grid);
+    group.add(grid);
 
     // Back walls on the far edges; the near edges stay open towards the viewer.
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0xefe9de, roughness: 0.9 });
+    const wallMat = new THREE.MeshStandardMaterial({ color: plan.wallColor, roughness: 0.9 });
     const wall = (w: number, d: number, x: number, z: number) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, WALL_HEIGHT, d), wallMat);
       m.position.set(x, WALL_HEIGHT / 2, z);
       m.receiveShadow = true;
       m.castShadow = true;
-      this.scene.add(m);
+      group.add(m);
     };
     wall(GRID_W, 0.12, GRID_W / 2, -0.06);
     wall(0.12, GRID_H, -0.06, GRID_H / 2);
-    // Low glass-like partitions marking the rooms on the right.
-    const glass = new THREE.MeshStandardMaterial({ color: 0xbcd4e6, transparent: true, opacity: 0.35 });
-    const partition = (w: number, d: number, x: number, z: number) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.9, d), glass);
-      m.position.set(x, 0.45, z);
-      this.scene.add(m);
-    };
-    partition(0.06, 5, 14, 2.5);
-    partition(7, 0.06, 20.5, 6);
 
-    this.buildPingPong();
+    for (const prop of plan.props) group.add(buildProp(prop, { warBoard: this.warBoard.texture }));
+    this.buildElevator(group);
 
-    const mat = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial({ color: 0x8c6f4e }));
-    mat.rotation.x = -Math.PI / 2;
-    mat.position.copy(cellCenter(DOOR, 0.004));
-    this.scene.add(mat);
+    if (plan.theme === 'lobby') {
+      const mat = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial({ color: 0x8c6f4e }));
+      mat.rotation.x = -Math.PI / 2;
+      mat.position.copy(cellCenter(DOOR, 0.004));
+      group.add(mat);
+    }
+    this.furnish(plan, group);
+    return { group, ...(room ? { room } : {}) };
   }
 
-  /** The ping-pong table: green top, white line, net, four legs. */
-  private buildPingPong(): void {
-    const { x, z, w, d } = PING_PONG;
+  /** The elevator next to the door: a grey cab people walk into on one floor and out of on another. */
+  private buildElevator(parent: THREE.Object3D): void {
+    const { x, z } = ELEVATOR;
     const box = (bw: number, bh: number, bd: number, color: number, px: number, py: number, pz: number) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), new THREE.MeshStandardMaterial({ color, roughness: 0.6 }));
+      const m = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.3 }));
       m.position.set(px, py, pz);
       m.castShadow = true;
       m.receiveShadow = true;
-      this.scene.add(m);
+      parent.add(m);
     };
-    const cx = x + w / 2;
-    const cz = z + d / 2;
-    box(w * 0.92, 0.05, d * 0.8, 0x1f6f4a, cx, 0.72, cz);
-    box(w * 0.92, 0.052, 0.02, 0xffffff, cx, 0.721, cz);
-    box(0.02, 0.12, d * 0.86, 0xf1f1f1, cx, 0.8, cz);
-    for (const [lx, lz] of [
-      [-1, -1],
-      [-1, 1],
-      [1, -1],
-      [1, 1],
-    ]) {
-      box(0.05, 0.7, 0.05, 0x333333, cx + lx * w * 0.4, 0.35, cz + lz * d * 0.32);
-    }
+    box(0.08, 1.9, 0.9, 0x8a939c, x + 0.04, 0.95, z + 0.5);
+    box(0.08, 1.9, 0.9, 0x8a939c, x + 0.96, 0.95, z + 0.5);
+    box(1, 0.12, 1, 0x6f7881, x + 0.5, 1.96, z + 0.5);
+    box(0.84, 1.8, 0.04, 0xb9c2ca, x + 0.5, 0.9, z + 0.96);
+    const el = document.createElement('div');
+    el.className = 'zone-label elevator-label';
+    el.textContent = TEXT.elevator;
+    const label = new CSS2DObject(el);
+    label.position.set(x + 0.5, 2.1, z + 0.5);
+    parent.add(label);
   }
 
   /** Day, dusk or night light. */
@@ -315,51 +373,181 @@ export class Office {
     for (const lamp of this.lamps) lamp.visible = l.lampsOn;
   }
 
-  private furnish(): void {
-    for (const f of FURNITURE) this.place(f);
-    for (const pod of PODS) {
-      // Two desks of 2 × 1, a screen and keyboard facing each seat, a chair per seat.
-      this.place({ model: 'desk', x: pod.x, z: pod.z, w: 2, d: 1, h: DESK_HEIGHT });
-      this.place({ model: 'desk', x: pod.x, z: pod.z + 1, w: 2, d: 1, h: DESK_HEIGHT });
-      for (const seat of pod.seats) {
+  private furnish(plan: FloorPlan, parent: THREE.Object3D): void {
+    for (const f of plan.furniture) this.place(f, parent);
+    for (const pod of plan.pods) {
+      // Two desks of 2 × 1; on each, facing its seat, what this floor works with; a chair per seat.
+      this.place({ model: 'desk', x: pod.x, z: pod.z, w: 2, d: 1, h: DESK_HEIGHT }, parent);
+      this.place({ model: 'desk', x: pod.x, z: pod.z + 1, w: 2, d: 1, h: DESK_HEIGHT }, parent);
+      pod.seats.forEach((seat, i) => {
         const yaw = FACING_YAW[seat.facing];
         const deskZ = seat.facing === 'south' ? seat.z + 1 : seat.z - 1;
         const back = seat.facing === 'south' ? 0.62 : 0.08;
-        this.place({ model: 'computerScreen', x: seat.x + 0.2, z: deskZ + back, w: 0.6, d: 0.3, h: 0.42, y0: DESK_HEIGHT, rot: yaw });
-        this.place({ model: 'computerKeyboard', x: seat.x + 0.25, z: deskZ + (seat.facing === 'south' ? 0.15 : 0.6), w: 0.5, d: 0.25, y0: DESK_HEIGHT, rot: yaw });
-        this.place({ model: 'chairDesk', x: seat.x + 0.15, z: seat.z + 0.15, w: 0.7, d: 0.7, h: 0.6, rot: yaw });
-      }
+        const near = seat.facing === 'south' ? 0.15 : 0.6;
+        const put = (model: string, dx: number, dz: number, w: number, d: number, h?: number) =>
+          this.place({ model, x: seat.x + dx, z: deskZ + dz, w, d, ...(h ? { h } : {}), y0: DESK_HEIGHT, rot: yaw }, parent);
+        switch (plan.deskKit) {
+          case 'laptop':
+            put('laptop', 0.25, seat.facing === 'south' ? 0.2 : 0.35, 0.5, 0.45);
+            break;
+          case 'dual':
+            put('computerScreen', 0.02, back, 0.48, 0.3, 0.38);
+            put('computerScreen', 0.5, back, 0.48, 0.3, 0.38);
+            put('computerKeyboard', 0.25, near, 0.5, 0.25);
+            break;
+          default:
+            put('computerScreen', 0.2, back, 0.6, 0.3, 0.42);
+            put('computerKeyboard', 0.25, near, 0.5, 0.25);
+            if (plan.deskKit === 'screenBooks' && i % 2 === 0) put('books', 0.72, near, 0.25, 0.3, 0.18);
+            if (plan.deskKit === 'screenPhone') {
+              const phone = new THREE.Mesh(PHONE_GEOMETRY, PHONE_MATERIAL);
+              phone.position.set(seat.x + 0.85, DESK_HEIGHT + 0.01, deskZ + near + 0.1);
+              phone.rotation.y = yaw;
+              parent.add(phone);
+            }
+        }
+        this.place({ model: 'chairDesk', x: seat.x + 0.15, z: seat.z + 0.15, w: 0.7, d: 0.7, h: 0.6, rot: yaw }, parent);
+      });
     }
   }
 
   // ---------------------------------------------------------------- view
 
-  setFloor(floor: string): void {
-    this.floor = floor;
+  /**
+   * Show one building: all its floors stacked (`level` = 'all', `slabs` say
+   * what each slab shows), or one floor (`room` names the room on it).
+   */
+  setView(building: string, level: LevelChoice, room: string, slabs: Slab[]): void {
+    const wasAll = this.level === 'all';
+    this.building = building;
+    this.level = level;
+    if (level !== 'all') this.theme = slabs.find((s) => s.level === level)?.theme ?? this.theme;
+    this.room = room;
+    this.showFloor();
+    this.overview.setBuilding(building);
+    this.overview.update(slabs);
+    const all = level === 'all';
+    // The sun's shadow covers one floor; over the whole building it would only cut off.
+    this.sun.castShadow = !all;
+    for (const v of this.visuals.values()) this.applyScale(v);
+    this.floorRoot.visible = !all;
+    this.overview.root.visible = all;
+    this.labels.domElement.classList.toggle('overview', all);
+    if (all !== wasAll) this.frameCamera();
     for (const v of this.visuals.values()) this.applyVisibility(v);
   }
 
-  /** A character and its name plate show only on the floor being viewed. */
+  /** Show the one-floor scene of the floor on screen (once the models are in). */
+  private showFloor(): void {
+    if (this.characters.length === 0) return;
+    const current = this.floorScene(this.theme);
+    for (const floor of this.floors.values()) floor.group.visible = floor === current;
+    if (current.room) current.room.textContent = this.room;
+  }
+
+  /** What the lobby's war-room board says (the building on screen). */
+  setBoard(content: BoardContent): void {
+    this.warBoard.draw(content);
+    this.overview.setBoard(content);
+  }
+
+  /** The plan of a floor of a building; floors the view has not named yet look like a department. */
+  private planOf(building: string, level: number): FloorPlan {
+    const theme = this.themes.get(`${building}#${level}`) ?? (level === 1 ? 'lobby' : level === 2 ? 'managers' : 'build');
+    return PLANS[theme];
+  }
+
+  private blockedOf(plan: FloorPlan): Set<string> {
+    let b = this.blocked.get(plan.theme);
+    if (!b) {
+      b = blockedCells(plan);
+      this.blocked.set(plan.theme, b);
+    }
+    return b;
+  }
+
+  /** Characters are larger in the whole-building view, so people stand out from the furniture. */
+  private applyScale(v: Visual): void {
+    v.obj.scale.setScalar(v.scale * (this.level === 'all' ? OVERVIEW_CHARACTER_SCALE : 1));
+  }
+
+  /** Whole building: frame every floor; one floor: back to the plain floor view. */
+  private frameCamera(): void {
+    const all = this.level === 'all';
+    const target = new THREE.Vector3(GRID_W / 2, all ? this.overview.top / 2 - 1 : 0, GRID_H / 2);
+    // Keep the direction the user turned to, change only how high the camera looks from.
+    const polar = all ? OVERVIEW_POLAR : ISO_POLAR;
+    const around = new THREE.Spherical().setFromVector3(this.camera.position.clone().sub(this.controls.target));
+    around.phi = polar;
+    this.camera.position.copy(target).add(new THREE.Vector3().setFromSpherical(around));
+    this.controls.target.copy(target);
+    this.controls.minPolarAngle = polar;
+    this.controls.maxPolarAngle = polar;
+    // Projected height of the building, roof and plaza included, at this angle; zoom so it fills the view.
+    const height = this.overview.top + FLOOR_GAP * 1.3;
+    const extent = height * Math.sin(polar) + (GRID_W + GRID_H) * Math.SQRT1_2 * Math.cos(polar);
+    this.camera.zoom = all ? 10.5 / (extent / 2 + 6) : 1;
+    this.controls.minZoom = all ? this.camera.zoom * 0.8 : 0.6;
+    this.camera.updateProjectionMatrix();
+    this.focus = undefined;
+  }
+
+  /** A click (not a drag) on a slab in the whole-building view opens that floor. */
+  private listenForSlabClicks(): void {
+    const el = this.labels.domElement;
+    let down: { x: number; y: number } | undefined;
+    el.addEventListener('pointerdown', (e) => {
+      down = { x: e.clientX, y: e.clientY };
+    });
+    el.addEventListener('pointerup', (e) => {
+      if (this.level !== 'all' || !down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+      const rect = el.getBoundingClientRect();
+      const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(ndc, this.camera);
+      const level = this.overview.pick(raycaster);
+      if (level !== undefined) this.onPickLevel?.(level);
+    });
+  }
+
+  /** Is this character on screen: same building, and its floor (or every floor in the whole-building view). */
+  private isShown(v: Visual): boolean {
+    return v.building === this.building && (this.level === 'all' || v.level === this.level);
+  }
+
+  /** Height a character stands at: its floor's slab in the whole-building view, the ground otherwise. */
+  private baseY(v: Visual): number {
+    if (this.level !== 'all') return 0;
+    if (v.ride) return v.ride.from + (v.ride.to - v.ride.from) * v.ride.t;
+    return this.overview.heightOf(v.level);
+  }
+
+  /** A character and its name plate show only on the building and floor being viewed. */
   private applyVisibility(v: Visual): void {
-    const shown = v.floor === this.floor;
+    const shown = this.isShown(v);
     v.obj.visible = shown;
     v.tag.visible = shown;
     v.tagEl.style.display = shown ? '' : 'none';
   }
 
-  private allocator(floor: string): PodAllocator {
-    let a = this.allocators.get(floor);
-    if (!a) {
-      a = new PodAllocator();
-      this.allocators.set(floor, a);
+  /** One pod allocator per floor of each building. */
+  private allocator(building: string, level: number): PodAllocator {
+    const key = `${building}#${level}`;
+    const plan = this.planOf(building, level);
+    let a = this.allocators.get(key);
+    // A floor that changed theme (settings edited) starts over with its new pods.
+    if (!a || a.theme !== plan.theme) {
+      a = { theme: plan.theme, alloc: new PodAllocator(plan.pods, plan.podOrder) };
+      this.allocators.set(key, a);
     }
-    return a;
+    return a.alloc;
   }
 
-  /** Session ids on a floor that have no pod (the sidebar lists them as overflow). */
-  overflow(view: OfficeView, floor: string): string[] {
-    const ids = view.groups.filter((g) => g.floor === floor).map((g) => g.sessionId);
-    return this.allocator(floor).overflow(ids);
+  /** Session ids of a building that have no pod on their floor (the sidebar lists them as overflow). */
+  overflow(view: OfficeView, building: string): string[] {
+    return view.groups
+      .filter((g) => g.building === building && !this.allocator(g.building, g.level).podOf(g.sessionId))
+      .map((g) => g.sessionId);
   }
 
   update(view: OfficeView): void {
@@ -370,9 +558,26 @@ export class Office {
       return;
     }
     const desired = new Map<string, { group: GroupView; actor: ActorView; place: { x: number; z: number; facing?: Facing } }>();
-    for (const floor of new Set(view.groups.map((g) => g.floor).concat(view.floors.map((f) => f.name)))) {
-      const groups = view.groups.filter((g) => g.floor === floor);
-      const alloc = this.allocator(floor);
+    // Every floor of every building, so a group that moved away frees its pod.
+    const floors = new Map<string, { building: string; level: number; groups: GroupView[] }>();
+    const floorOf = (building: string, level: number) => {
+      const key = `${building}#${level}`;
+      let f = floors.get(key);
+      if (!f) {
+        f = { building, level, groups: [] };
+        floors.set(key, f);
+      }
+      return f;
+    };
+    for (const b of view.buildings) {
+      for (const l of b.levels) {
+        this.themes.set(`${b.name}#${l.level}`, l.theme);
+        floorOf(b.name, l.level);
+      }
+    }
+    for (const g of view.groups) floorOf(g.building, g.level).groups.push(g);
+    for (const { building, level, groups } of floors.values()) {
+      const alloc = this.allocator(building, level);
       alloc.update(groups.map((g) => g.sessionId));
       for (const group of groups) {
         const pod = alloc.podOf(group.sessionId);
@@ -390,19 +595,23 @@ export class Office {
     for (const [id, { group, actor, place }] of desired) {
       let v = this.visuals.get(id);
       const seat: Place = place.facing ? { ...place, pose: 'sit' } : { x: place.x, z: place.z };
-      const instant = !this.synced || group.floor !== this.floor;
+      const instant = !this.synced || group.building !== this.building || (this.level !== 'all' && group.level !== this.level);
       if (!v || v.leaving) {
         if (v) this.dispose(v);
-        v = this.spawn(actor, group, instant ? seat : DOOR);
+        v = this.spawn(actor, group, instant ? seat : entranceOf(group.level));
         v.seat = seat;
         if (!instant) this.walkTo(v, seat);
         else v.place = seat;
-      } else if (v.floor !== group.floor) {
-        // The group moved to another floor (e.g. edited floor rules): take its seat there at once.
-        v.floor = group.floor;
+      } else if (v.building !== group.building) {
+        // The group moved to another building (e.g. edited building rules): take its seat there at once.
+        v.building = group.building;
+        v.level = group.level;
+        v.transfer = undefined;
         v.seat = seat;
         this.teleport(v, seat);
         this.applyVisibility(v);
+      } else if (v.level !== group.level || v.transfer) {
+        this.moveFloors(v, group.level, seat);
       } else if (!v.seat || v.seat.x !== seat.x || v.seat.z !== seat.z) {
         v.seat = seat;
         if (actor.status !== 'idle') {
@@ -411,7 +620,7 @@ export class Office {
         }
       }
       // Leaving idle (new work, or dozing off): back to the seat.
-      if (actor.status !== 'idle' && v.wanderUntil !== undefined) {
+      if (actor.status !== 'idle' && v.wanderUntil !== undefined && !v.transfer) {
         v.wanderUntil = undefined;
         if (v.seat && !samePlace(v.place, v.seat)) this.walkTo(v, v.seat);
       }
@@ -428,7 +637,8 @@ export class Office {
       if ((o as THREE.Mesh).isMesh) o.castShadow = true;
     });
     const box = new THREE.Box3().setFromObject(obj);
-    obj.scale.setScalar((CHAR_HEIGHT * (actor.role === 'main' ? 1 : 0.88)) / (box.max.y - box.min.y));
+    const scale = (CHAR_HEIGHT * (actor.role === 'main' ? 1 : 0.88)) / (box.max.y - box.min.y);
+    obj.scale.setScalar(scale);
     obj.position.copy(cellCenter(at));
     const mixer = new THREE.AnimationMixer(obj);
     const actions: Record<string, THREE.AnimationAction> = {};
@@ -441,9 +651,10 @@ export class Office {
     tag.center.set(0.5, 1);
     this.scene.add(tag);
 
-    const v: Visual = { id: actor.id, floor: group.floor, obj, mixer, actions, path: [], leaving: false, tag, tagEl, tagKey: '' };
+    const v: Visual = { id: actor.id, building: group.building, level: group.level, scale, obj, mixer, actions, path: [], leaving: false, tag, tagEl, tagKey: '' };
     this.visuals.set(actor.id, v);
     this.applyVisibility(v);
+    this.applyScale(v);
     return v;
   }
 
@@ -457,7 +668,8 @@ export class Office {
   private occupiedPois(except: Visual): Set<string> {
     const taken = new Set<string>();
     for (const v of this.visuals.values()) {
-      if (v !== except && v.wanderUntil !== undefined && v.place) taken.add(cellKey(v.place));
+      const sameFloor = v.building === except.building && v.level === except.level;
+      if (v !== except && sameFloor && v.wanderUntil !== undefined && v.place) taken.add(cellKey(v.place));
     }
     return taken;
   }
@@ -466,7 +678,7 @@ export class Office {
   private wander(v: Visual, now: number): void {
     if (v.status !== 'idle' || v.leaving || v.path.length > 0) return;
     if (v.wanderUntil !== undefined && now < v.wanderUntil) return;
-    const poi = choosePoi(POIS, this.occupiedPois(v));
+    const poi = choosePoi(this.planOf(v.building, v.level).pois, this.occupiedPois(v));
     if (!poi) {
       v.wanderUntil = now + dwellMs();
       return;
@@ -481,14 +693,66 @@ export class Office {
 
   private walkTo(v: Visual, place: Place): void {
     v.place = place;
-    v.path = findPath(this.currentCell(v), place, this.blocked).slice(1).map((c) => cellCenter(c));
+    v.path = findPath(this.currentCell(v), place, this.blockedOf(this.planOf(v.building, v.level)))
+      .slice(1)
+      .map((c) => cellCenter(c));
+  }
+
+  /**
+   * The group went to another floor: walk into the elevator here and come out
+   * there. Seen from another floor (or before the first view), just move.
+   */
+  private moveFloors(v: Visual, level: number, seat: Place): void {
+    v.seat = seat;
+    if (level === v.level) {
+      // Called back before the elevator came: back to the seat.
+      v.transfer = undefined;
+      this.walkTo(v, seat);
+      return;
+    }
+    if (!this.isShown(v) || !this.synced) {
+      v.level = level;
+      v.transfer = undefined;
+      this.teleport(v, seat);
+      this.applyVisibility(v);
+      return;
+    }
+    v.transfer = { level, seat };
+    v.wanderUntil = undefined;
+    this.walkTo(v, { x: ELEVATOR.x, z: ELEVATOR.z });
+  }
+
+  /** At the elevator: leave this floor and step out on the new one. */
+  private arrive(v: Visual): void {
+    const { level, seat } = v.transfer!;
+    v.transfer = undefined;
+    v.ride = undefined;
+    v.level = level;
+    v.obj.position.copy(cellCenter(ELEVATOR));
+    this.applyVisibility(v);
+    if (this.isShown(v)) this.walkTo(v, seat);
+    else this.teleport(v, seat);
+  }
+
+  /** In the whole-building view the elevator is a shaft: ride it up or down before stepping out. */
+  private atElevator(v: Visual, dt: number): void {
+    if (this.level !== 'all') return this.arrive(v);
+    const to = this.overview.heightOf(v.transfer!.level);
+    if (!v.ride) v.ride = { from: this.overview.heightOf(v.level), to, t: 0 };
+    const seconds = Math.max(0.6, (Math.abs(v.ride.to - v.ride.from) / FLOOR_GAP) * 0.8);
+    v.ride.t = Math.min(1, v.ride.t + dt / seconds);
+    if (v.ride.t >= 1) this.arrive(v);
   }
 
   private leave(v: Visual): void {
     v.leaving = true;
+    v.transfer = undefined;
+    v.ride = undefined;
     v.place = undefined;
-    if (v.floor !== this.floor) return this.dispose(v);
-    v.path = findPath(this.currentCell(v), DOOR, this.blocked).slice(1).map((c) => cellCenter(c));
+    if (!this.isShown(v)) return this.dispose(v);
+    v.path = findPath(this.currentCell(v), entranceOf(v.level), this.blockedOf(this.planOf(v.building, v.level)))
+      .slice(1)
+      .map((c) => cellCenter(c));
     v.tagEl.classList.add('leaving');
   }
 
@@ -521,7 +785,11 @@ export class Office {
     badge.textContent = MODEL_LETTER[actor.model];
     badge.title = actor.model;
     name.append(badge, actor.title);
-    v.tagEl.append(bubble, name);
+    // Shown only in the whole-building view (see style.css): the status word, never tools, files or commands.
+    const mini = document.createElement('div');
+    mini.className = 'mini';
+    mini.textContent = overviewTagText(actor);
+    v.tagEl.append(bubble, name, mini);
     if (actor.role === 'main') {
       const label = document.createElement('div');
       label.className = 'group';
@@ -531,10 +799,11 @@ export class Office {
   }
 
   /** Glide the camera to a group's pod. */
-  focusGroup(floor: string, sessionId: string): boolean {
-    const pod = this.allocator(floor).podOf(sessionId);
+  focusGroup(building: string, level: number, sessionId: string): boolean {
+    const pod = this.allocator(building, level).podOf(sessionId);
     if (!pod) return false;
-    this.focus = { from: this.controls.target.clone(), to: new THREE.Vector3(pod.center.x, 0, pod.center.z), t: 0 };
+    const y = this.level === 'all' ? this.overview.heightOf(level) : 0;
+    this.focus = { from: this.controls.target.clone(), to: new THREE.Vector3(pod.center.x, y, pod.center.z), t: 0 };
     return true;
   }
 
@@ -565,10 +834,11 @@ export class Office {
     for (const v of [...this.visuals.values()]) {
       v.mixer.update(dt);
       this.wander(v, now);
+      const base = this.baseY(v);
       if (v.path.length > 0) {
-        const target = v.path[0];
+        const target = v.path[0].clone().setY(base);
         const pos = v.obj.position;
-        pos.y = 0;
+        pos.y = base;
         const step = WALK_SPEED * dt;
         const delta = target.clone().sub(pos);
         if (delta.length() <= step) {
@@ -582,16 +852,20 @@ export class Office {
       } else if (v.leaving) {
         this.dispose(v);
         continue;
+      } else if (v.transfer) {
+        this.atElevator(v, dt);
+        v.obj.position.y = this.baseY(v);
+        this.play(v, 'idle');
       } else if (v.place?.facing && v.place.pose === 'stand') {
-        v.obj.position.set(v.place.x + 0.5, 0, v.place.z + 0.5);
+        v.obj.position.set(v.place.x + 0.5, base, v.place.z + 0.5);
         v.obj.rotation.y = FACING_YAW[v.place.facing];
         this.play(v, 'idle');
       } else if (v.place?.facing) {
-        v.obj.position.set(v.place.x + 0.5, SEAT_LIFT, v.place.z + 0.5);
+        v.obj.position.set(v.place.x + 0.5, base + SEAT_LIFT, v.place.z + 0.5);
         v.obj.rotation.y = FACING_YAW[v.place.facing];
         this.play(v, 'sit');
       } else {
-        v.obj.position.y = 0;
+        v.obj.position.y = base;
         this.play(v, 'idle');
       }
       v.tag.position.set(v.obj.position.x, v.obj.position.y + CHAR_HEIGHT + 0.25, v.obj.position.z);

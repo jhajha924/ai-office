@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { TWO_FLOORS } from './fixtures/config.ts';
+import { TWO_BUILDINGS } from './fixtures/config.ts';
 import { OfficeStore } from '../server/src/office/store.ts';
 import type { OfficeEvent } from '../server/src/office/types.ts';
 import { buildView } from '../server/src/office/view.ts';
@@ -40,7 +40,7 @@ describe('transcript watcher', () => {
   });
 
   const watcher = () =>
-    new TranscriptWatcher({ projectsDir: root, store, config: { get: () => TWO_FLOORS }, now: () => now });
+    new TranscriptWatcher({ projectsDir: root, store, config: { get: () => TWO_BUILDINGS }, now: () => now });
   const file = (name = 'sess-1') => path.join(projectDir, `${name}.jsonl`);
   const append = (f: string, data: string) => fs.appendFileSync(f, data, 'utf-8');
 
@@ -122,7 +122,7 @@ describe('transcript watcher', () => {
     expect(total).toBeGreaterThan(STARTUP_TAIL_BYTES * 2);
     // Far fewer events than lines in the file: only the tail was read.
     expect(store.events.length).toBeLessThan(STARTUP_TAIL_BYTES / 100);
-    const group = buildView(store, TWO_FLOORS, now).groups[0];
+    const group = buildView(store, TWO_BUILDINGS, now).groups[0];
     expect(group.label).toBe('大型對話的第一句');
     expect(group.actors[0]).toMatchObject({ status: 'running', tool: 'Grep' });
   });
@@ -154,8 +154,8 @@ describe('transcript watcher', () => {
     expect(store.groups.get('sess-1')?.label).toBe('原本的名稱');
   });
 
-  // office-floor-routing spec, Scenario: 工作對話切換到暫存資料夾
-  it('keeps a work session on the masked floor after its cwd moves elsewhere', async () => {
+  // office-building-routing spec, Scenario: 工作對話切換到暫存資料夾
+  it('keeps a work session on the masked building after its cwd moves elsewhere', async () => {
     const work = path.join(root, 'd--work-app');
     fs.mkdirSync(work);
     const f = path.join(work, 'w-1.jsonl');
@@ -165,8 +165,8 @@ describe('transcript watcher', () => {
     await w.scanOnce();
     append(f, `${toolUse('Read', 'r1', { file_path: 'D:/work/app/Billing.pas' }, { cwd: temp, at: now + 1 })}\n`);
     await w.scanOnce();
-    const view = buildView(store, TWO_FLOORS, now + 2);
-    expect(view.groups[0].floor).toBe('工作樓');
+    const view = buildView(store, TWO_BUILDINGS, now + 2);
+    expect(view.groups[0].building).toBe('工作樓');
     expect(view.groups[0].actors[0].bubble).toBe('讀取檔案');
     expect(JSON.stringify(view)).not.toContain('Billing.pas');
   });
@@ -177,7 +177,7 @@ describe('transcript watcher', () => {
     fs.writeFileSync(path.join(work, 'w-2.jsonl'), '');
     await watcher().scanOnce();
     store.touch('w-2', 'C:/Temp/elsewhere', now);
-    expect(buildView(store, TWO_FLOORS, now).groups[0].floor).toBe('工作樓');
+    expect(buildView(store, TWO_BUILDINGS, now).groups[0].building).toBe('工作樓');
   });
 
   describe('group label from the conversation title', () => {
@@ -223,6 +223,6 @@ describe('transcript watcher', () => {
     const f = file('abcd9999');
     fs.writeFileSync(f, `${thinking({ at: now })}\n`);
     await watcher().scanOnce();
-    expect(buildView(store, TWO_FLOORS, now).groups[0].label).toBe('對話 abcd');
+    expect(buildView(store, TWO_BUILDINGS, now).groups[0].label).toBe('對話 abcd');
   });
 });

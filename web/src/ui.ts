@@ -1,9 +1,11 @@
 import type { ActorStatus, GroupView, OfficeView } from '../../server/src/office/types.ts';
+import type { LevelChoice } from './levels.ts';
+import { levelTag } from './levels.ts';
 import { TEXT } from './text.ts';
 
 /**
- * The HTML around the office: floor tabs with their waiting counts, the stats
- * bar of the floor on screen, and the sidebar sorting groups into
+ * The HTML around the office: building tabs with their waiting counts, the stats
+ * bar of the building on screen, and the sidebar sorting groups into
  * 需要你 / 工作中 / 已完成.
  */
 
@@ -20,17 +22,17 @@ export function columnOf(group: GroupView): Column {
 }
 
 /**
- * The floor to show: the remembered one while it still exists, otherwise the
- * first floor of the list (the config file may have changed since).
+ * The building to show: the remembered one while it still exists, otherwise the
+ * first building of the list (the config file may have changed since).
  */
-export function pickFloor(saved: string | undefined, floors: string[]): string {
-  if (saved !== undefined && floors.includes(saved)) return saved;
-  return floors[0] ?? saved ?? '';
+export function pickBuilding(saved: string | undefined, buildings: string[]): string {
+  if (saved !== undefined && buildings.includes(saved)) return saved;
+  return buildings[0] ?? saved ?? '';
 }
 
-/** Tabs are only worth showing when there is more than one floor. */
-export function showTabs(floors: string[]): boolean {
-  return floors.length > 1;
+/** Tabs are only worth showing when there is more than one building. */
+export function showTabs(buildings: string[]): boolean {
+  return buildings.length > 1;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] => {
@@ -41,12 +43,14 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
 };
 
 export interface UiHandlers {
-  onFloor(floor: string): void;
+  onBuilding(building: string): void;
+  onLevel(level: LevelChoice): void;
   onGroup(sessionId: string): void;
 }
 
 export class Ui {
   private readonly tabs = document.getElementById('tabs')!;
+  private readonly levels = document.getElementById('levels')!;
   private readonly stats = document.getElementById('stats')!;
   private readonly columns = {
     needs: document.getElementById('col-needs')!,
@@ -66,22 +70,46 @@ export class Ui {
     this.offline.hidden = online;
   }
 
-  render(view: OfficeView, floor: string, overflow: string[]): void {
-    this.tabs.hidden = !showTabs(view.floors.map((f) => f.name));
+  render(view: OfficeView, building: string, level: LevelChoice, overflow: string[]): void {
+    this.tabs.hidden = !showTabs(view.buildings.map((f) => f.name));
     this.tabs.replaceChildren(
-      ...view.floors.map((f) => {
-        const tab = el('button', f.name === floor ? 'tab active' : 'tab', f.name);
+      ...view.buildings.map((f) => {
+        const tab = el('button', f.name === building ? 'tab active' : 'tab', f.name);
         tab.type = 'button';
-        tab.dataset.floor = f.name;
+        tab.dataset.building = f.name;
         const badge = el('span', f.stats.waiting > 0 ? 'badge alert' : 'badge', String(f.stats.waiting));
         badge.title = TEXT.waitingBadge;
         tab.append(badge);
-        tab.addEventListener('click', () => this.handlers.onFloor(f.name));
+        tab.addEventListener('click', () => this.handlers.onBuilding(f.name));
         return tab;
       }),
     );
 
-    const stats = view.floors.find((f) => f.name === floor)?.stats ?? { working: 0, outputs: 0, waiting: 0 };
+    // The whole building first, then the floors, top floor first, each with the number of groups on it.
+    const levels = view.buildings.find((f) => f.name === building)?.levels ?? [];
+    const all = el('button', level === 'all' ? 'level all active' : 'level all');
+    all.type = 'button';
+    all.dataset.level = 'all';
+    all.append(el('span', 'level-tag', levelTag('all')), el('span', 'level-name', ''), el('span', 'level-count', String(levels.reduce((n, l) => n + l.groups, 0))));
+    all.addEventListener('click', () => this.handlers.onLevel('all'));
+    this.levels.replaceChildren(
+      all,
+      ...[...levels].reverse().map((l) => {
+        const button = el('button', l.level === level ? 'level active' : 'level');
+        button.type = 'button';
+        button.dataset.level = String(l.level);
+        button.append(
+          el('span', 'level-tag', levelTag(l.level)),
+          el('span', 'level-name', l.name),
+          el('span', l.groups > 0 ? 'level-count busy' : 'level-count', String(l.groups)),
+        );
+        button.title = TEXT.levelButton(levelTag(l.level), l.name);
+        button.addEventListener('click', () => this.handlers.onLevel(l.level));
+        return button;
+      }),
+    );
+
+    const stats = view.buildings.find((f) => f.name === building)?.stats ?? { working: 0, outputs: 0, waiting: 0 };
     this.stats.replaceChildren(
       el('span', 'stat', TEXT.statWorking(stats.working)),
       el('span', 'dot', '·'),
@@ -90,14 +118,16 @@ export class Ui {
       el('span', stats.waiting > 0 ? 'stat alert' : 'stat', TEXT.statWaiting(stats.waiting)),
     );
 
-    const groups = view.groups.filter((g) => g.floor === floor);
+    const groups = view.groups.filter((g) => g.building === building);
     const unseated = new Set(overflow);
     for (const column of Object.values(this.columns)) column.querySelector('ul')!.replaceChildren();
     for (const group of groups) {
       const main = group.actors.find((a) => a.role === 'main') ?? group.actors[0];
       const row = el('li', `row status-${main?.status ?? 'idle'}`);
       row.dataset.session = group.sessionId;
-      row.append(el('div', 'row-label', group.label), el('div', 'row-bubble', main?.bubble ?? ''));
+      const label = el('div', 'row-label');
+      label.append(el('span', group.level === level ? 'row-level here' : 'row-level', levelTag(group.level)), group.label);
+      row.append(label, el('div', 'row-bubble', main?.bubble ?? ''));
       if (unseated.has(group.sessionId)) row.append(el('div', 'row-note', TEXT.unseated));
       row.addEventListener('click', () => this.handlers.onGroup(group.sessionId));
       this.columns[columnOf(group)].querySelector('ul')!.append(row);

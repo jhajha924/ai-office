@@ -18,7 +18,9 @@ export type OfficeEventKind =
   | 'waiting'
   | 'actor.join'
   | 'blocked'
-  | 'progress';
+  | 'progress'
+  /** The session used a skill (Skill tool or a slash command); `skill` names it. */
+  | 'skill.use';
 
 export type OfficeEventSource = 'observe' | 'hook' | 'demo';
 
@@ -70,7 +72,7 @@ export interface ActorView {
   title: string;
   model: ModelFamily;
   status: ActorStatus;
-  /** Chinese status text, already masked on a masked floor. */
+  /** Chinese status text, already masked on a masked building. */
   bubble: string;
   tool?: string;
   since: number;
@@ -80,7 +82,7 @@ export interface ActorView {
   task: string;
   /** Absent = no progress bar. */
   progress?: Progress | 'indeterminate';
-  /** Main actor on an unmasked floor only: today's output files, newest first, at most 20. */
+  /** Main actor on an unmasked building only: today's output files, newest first, at most 20. */
   outputs?: OutputRef[];
   /** Main actor only: today's distinct output files of the session. */
   outputCount?: number;
@@ -94,22 +96,42 @@ export interface OutputRef {
 
 export interface GroupView {
   sessionId: string;
-  floor: string;
+  building: string;
+  /** Floor in its building: the department of its current skill, or 1 (the lobby). */
+  level: number;
   label: string;
   actors: ActorView[];
   lastActivity: number;
 }
 
-export interface FloorStats {
+export interface BuildingStats {
   working: number;
   outputs: number;
   waiting: number;
 }
 
-export interface FloorView {
+/** How a floor looks: the lobby, the managers' floor, or one of five department styles. */
+export type DepartmentTheme = 'analysis' | 'spec' | 'build' | 'qa' | 'release';
+export type FloorTheme = 'lobby' | 'managers' | DepartmentTheme;
+
+/** One floor of a building, as the floor buttons show it. */
+export interface LevelView {
+  level: number;
+  name: string;
+  kind: 'lobby' | 'managers' | 'department';
+  departmentId?: string;
+  /** How the floor looks (decided by the server, see levelList). */
+  theme: FloorTheme;
+  /** Groups (sessions) on this floor of this building. */
+  groups: number;
+}
+
+export interface BuildingView {
   name: string;
   masked: boolean;
-  stats: FloorStats;
+  stats: BuildingStats;
+  /** Its floors, lowest first, each with the number of groups on it. */
+  levels: LevelView[];
 }
 
 export type FeedKind = 'done' | 'handoff' | 'return' | 'waiting';
@@ -117,7 +139,7 @@ export type FeedKind = 'done' | 'handoff' | 'return' | 'waiting';
 export interface FeedEntryView {
   id: string;
   at: number;
-  floor: string;
+  building: string;
   kind: FeedKind;
   text: string;
 }
@@ -125,7 +147,7 @@ export interface FeedEntryView {
 export interface HandoffView {
   id: string;
   at: number;
-  floor: string;
+  building: string;
   /** Actor ids: main → sub-agent on a hand-off, sub-agent → main on a return. */
   from: string;
   to: string;
@@ -133,7 +155,7 @@ export interface HandoffView {
 }
 
 export interface OfficeView {
-  floors: FloorView[];
+  buildings: BuildingView[];
   groups: GroupView[];
   /** Latest 30 activity entries, newest first. */
   feed: FeedEntryView[];

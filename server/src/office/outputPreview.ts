@@ -2,14 +2,14 @@ import * as fsp from 'node:fs/promises';
 
 import type { OfficeConfig } from './config.ts';
 import { resolveOutputToken } from './feed.ts';
-import { floorForSession } from './floorRouting.ts';
+import { buildingForSession } from './floorRouting.ts';
 import { baseName } from './statusText.ts';
 import type { OfficeStore } from './store.ts';
 
 /**
  * GET /api/output/<token>: the plain-text preview of one output file. Only a
  * token for a file the session wrote today resolves, only on an unmasked
- * floor, and at most PREVIEW_MAX_BYTES are read. A masked floor's files are
+ * building, and at most PREVIEW_MAX_BYTES are read. A masked building's files are
  * never opened.
  */
 
@@ -54,7 +54,7 @@ export async function previewOutput(
   const found = resolveOutputToken(store, token);
   if (!found) return { status: 404 };
   const output = store.outputs.find((o) => o.sessionId === found.sessionId && o.path === found.path)!;
-  if (floorForSession(store.homes.get(found.sessionId), output.cwd, config).mask) return { status: 403 };
+  if (buildingForSession(store.homes.get(found.sessionId), output.cwd, config).mask) return { status: 403 };
   const name = baseName(found.path);
 
   if (demoText) {

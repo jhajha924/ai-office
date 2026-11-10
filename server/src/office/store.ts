@@ -25,6 +25,9 @@ export interface ActorState {
   skill?: string;
 }
 
+/** How many distinct skills a group remembers (for its floor). */
+export const SKILLS_KEPT = 20;
+
 export interface GroupState {
   sessionId: string;
   cwd: string;
@@ -40,6 +43,8 @@ export interface GroupState {
   openTools: Map<string, { tool?: string; detail?: string }>;
   /** Tasks done / total of the change the session works on; absent = cannot tell. */
   progress?: Progress;
+  /** Skills the session used, oldest first, each once, at most SKILLS_KEPT. */
+  skills: string[];
 }
 
 /**
@@ -77,7 +82,7 @@ const ASK_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 export class OfficeStore {
   readonly groups = new Map<string, GroupState>();
   outputs: OutputRecord[] = [];
-  /** Where each session was started; decides its floor. Kept after a group leaves. */
+  /** Where each session was started; decides its building. Kept after a group leaves. */
   readonly homes = new Map<string, SessionHome>();
   feed: FeedRecord[] = [];
   private feedSeq = 0;
@@ -104,6 +109,7 @@ export class OfficeStore {
         pendingAsks: new Set(),
         hookWaiting: false,
         openTools: new Map(),
+        skills: [],
       };
       this.groups.set(sessionId, group);
     }
@@ -278,6 +284,11 @@ export class OfficeStore {
         break;
       case 'progress':
         group.progress = event.progress && event.progress.total > 0 ? event.progress : undefined;
+        break;
+      case 'skill.use':
+        if (event.skill) {
+          group.skills = [...group.skills.filter((s) => s !== event.skill), event.skill].slice(-SKILLS_KEPT);
+        }
         break;
       case 'blocked':
         break;

@@ -2,34 +2,34 @@ import type { OfficeConfig, RosterTitles } from './config.ts';
 
 /**
  * Staff roster: the job title a sub-agent, a Skill or an MCP server is shown
- * with. Lookup order: the floor's override → the roster → the fallback.
+ * with. Lookup order: the building's override → the roster → the fallback.
  */
 
 function lookup(
   kind: keyof RosterTitles,
   key: string,
-  floor: string | undefined,
+  building: string | undefined,
   config: OfficeConfig,
 ): string | undefined {
-  const override = floor === undefined ? undefined : config.floorOverrides[floor]?.[kind];
+  const override = building === undefined ? undefined : config.buildingOverrides[building]?.[kind];
   return override?.[key] ?? config.roster[kind][key];
 }
 
 /** Title for an Agent/Task sub-agent of the given subagent_type. */
 export function subagentTitle(
   subagentType: string | undefined,
-  floor: string | undefined,
+  building: string | undefined,
   config: OfficeConfig,
 ): string {
   return (
-    (subagentType === undefined ? undefined : lookup('subagents', subagentType, floor, config)) ??
+    (subagentType === undefined ? undefined : lookup('subagents', subagentType, building, config)) ??
     config.roster.fallbackSubagent
   );
 }
 
 /** Title for the synthetic employee a Skill invocation brings in. */
-export function skillTitle(skill: string, floor: string | undefined, config: OfficeConfig): string {
-  return lookup('skills', skill, floor, config) ?? config.roster.fallbackSkill.replace('{name}', skill);
+export function skillTitle(skill: string, building: string | undefined, config: OfficeConfig): string {
+  return lookup('skills', skill, building, config) ?? config.roster.fallbackSkill.replace('{name}', skill);
 }
 
 /** The server segment of an MCP tool name (mcp__<server>__<tool>), or undefined. */

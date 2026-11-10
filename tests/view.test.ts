@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { TWO_FLOORS } from './fixtures/config.ts';
+import { TWO_BUILDINGS } from './fixtures/config.ts';
 import { OfficeStore } from '../server/src/office/store.ts';
 import type { OfficeEvent, OfficeEventSource } from '../server/src/office/types.ts';
 import { mainActorId, subActorId } from '../server/src/office/types.ts';
 import { buildView } from '../server/src/office/view.ts';
 
-const config = TWO_FLOORS;
+const config = TWO_BUILDINGS;
 const T0 = new Date(2026, 9, 31, 10, 0, 0).getTime();
 
 function ev(sessionId: string, cwd: string, kind: OfficeEvent['kind'], extra: Partial<OfficeEvent> = {}): OfficeEvent {
@@ -32,19 +32,19 @@ describe('the OfficeEvent seam', () => {
 
 describe('processing station', () => {
   // office-event-stream spec, Scenario: 工作樓讀檔
-  it('masks a work-floor file read before it leaves the server', () => {
+  it('masks a work-building file read before it leaves the server', () => {
     const store = new OfficeStore();
     store.apply(ev('w1', 'D:\\work\\app', 'tool.start', { tool: 'Read', detail: 'D:\\work\\app\\Billing.pas' }));
     const view = buildView(store, config, T0 + 1);
     const text = JSON.stringify(view);
     expect(text).not.toContain('Billing');
     expect(text).not.toContain('app');
-    expect(view.groups[0].floor).toBe('工作樓');
+    expect(view.groups[0].building).toBe('工作樓');
     expect(view.groups[0].actors[0].bubble).toBe('讀取檔案');
   });
 
   // office-event-stream spec, Scenario: 私人樓只顯示檔名
-  it('shows only the file name on the private floor', () => {
+  it('shows only the file name on the private building', () => {
     const store = new OfficeStore();
     store.apply(ev('p1', 'D:\\home\\notes', 'tool.start', { tool: 'Read', detail: 'D:\\home\\notes\\proposal.md' }));
     const view = buildView(store, config, T0 + 1);
@@ -52,7 +52,7 @@ describe('processing station', () => {
     expect(JSON.stringify(view)).not.toContain('home');
   });
 
-  it('masks a work-floor sub-agent description', () => {
+  it('masks a work-building sub-agent description', () => {
     const store = new OfficeStore();
     const sub = subActorId('w2', 'toolu_1');
     store.apply(ev('w2', 'D:\\work\\app', 'handoff.out', { actorId: sub, subagentType: 'Explore', detail: '找批價程式' }));
@@ -64,7 +64,7 @@ describe('processing station', () => {
   });
 });
 
-describe('floor stats', () => {
+describe('building stats', () => {
   const work = 'D:\\work\\app';
 
   // office-session-groups spec, Scenario: 一個對話卡在等核准 / 核准後更新
@@ -75,11 +75,11 @@ describe('floor stats', () => {
     store.apply(ev('c', work, 'tool.start', { tool: 'Bash' }));
     store.apply(ev('c', work, 'waiting', { source: 'hook' }));
     store.apply(ev('a', work, 'handoff.out', { actorId: subActorId('a', 't1'), subagentType: 'Explore' }));
-    let stats = buildView(store, config, T0 + 1).floors.find((f) => f.name === '工作樓')!.stats;
+    let stats = buildView(store, config, T0 + 1).buildings.find((f) => f.name === '工作樓')!.stats;
     expect(stats).toMatchObject({ working: 2, waiting: 1 });
 
     store.apply(ev('c', work, 'tool.end', { at: T0 + 2 }));
-    stats = buildView(store, config, T0 + 3).floors.find((f) => f.name === '工作樓')!.stats;
+    stats = buildView(store, config, T0 + 3).buildings.find((f) => f.name === '工作樓')!.stats;
     expect(stats).toMatchObject({ working: 3, waiting: 0 });
   });
 
@@ -94,12 +94,12 @@ describe('floor stats', () => {
     for (const [file, offset] of files) {
       store.apply(ev('o', 'D:\\home\\x', 'output.add', { tool: 'Write', detail: `D:\\home\\x\\${file}`, at: T0 + offset }));
     }
-    const stats = buildView(store, config, T0 + 1).floors.find((f) => f.name === '私人樓')!.stats;
+    const stats = buildView(store, config, T0 + 1).buildings.find((f) => f.name === '私人樓')!.stats;
     expect(stats.outputs).toBe(expected);
   });
 
-  it('lists both floors even when empty', () => {
-    expect(buildView(new OfficeStore(), config, T0).floors.map((f) => f.name)).toEqual(['工作樓', '私人樓']);
+  it('lists both buildings even when empty', () => {
+    expect(buildView(new OfficeStore(), config, T0).buildings.map((f) => f.name)).toEqual(['工作樓', '私人樓']);
   });
 });
 

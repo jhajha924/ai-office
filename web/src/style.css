@@ -81,6 +81,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .row.status-stuck { border-left-color: var(--stuck); }
 
 .zone-label { font-size: 12px; color: #8a8274; letter-spacing: 2px; pointer-events: none; }
+.zone-label.office-plate { font-size: 11px; color: #4c1d95; background: rgba(255, 255, 255, 0.92); border: 1px solid #c4b5fd; border-radius: 4px; padding: 1px 6px; letter-spacing: 1px; }
 
 .tag {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
@@ -201,3 +202,86 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   .cards { min-height: 120px; }
   .card { width: 180px; }
 }
+
+/* Floor buttons on the left of the office, top floor first. */
+.levels {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%); z-index: 3;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.level {
+  display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 6px;
+  min-width: 132px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line);
+  background: rgba(255, 253, 248, 0.92); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; text-align: left;
+}
+.level:hover { border-color: #b9b1a1; }
+.level.active { background: #2b2a27; color: #fff; border-color: #2b2a27; }
+.level-tag { font-weight: 700; }
+.level-count { min-width: 18px; padding: 0 5px; border-radius: 999px; background: #e7e1d5; color: var(--muted); text-align: center; }
+.level-count.busy { background: var(--running); color: #fff; }
+.level.active .level-count { background: #55524b; color: #fff; }
+.level.active .level-count.busy { background: var(--running); }
+/* Floor tag in front of each sidebar row. */
+.row-level {
+  display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px;
+  background: #e7e1d5; color: var(--muted); font-size: 11px; font-weight: 700;
+}
+.row-level.here { background: #2b2a27; color: #fff; }
+.elevator-label { font-weight: 700; }
+
+/* Whole-building view: name plates shrink to one status dot. */
+.labels.overview .tag .bubble, .labels.overview .tag .name, .labels.overview .tag .group { display: none; }
+.labels.overview .tag::before {
+  content: ''; display: block; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--idle); border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+.labels.overview .tag.status-thinking::before { background: var(--thinking); }
+.labels.overview .tag.status-running::before { background: var(--running); }
+.labels.overview .tag.status-replying::before { background: var(--replying); }
+.labels.overview .tag.status-done::before { background: var(--done); }
+.labels.overview .tag.status-waiting::before { background: var(--waiting); }
+.labels.overview .tag.status-stuck::before { background: var(--stuck); }
+/* The label beside each slab. */
+.slab-label {
+  padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line); background: rgba(255, 253, 248, 0.94);
+  color: var(--ink); font-size: 12px; white-space: nowrap; pointer-events: none;
+}
+.slab-label.alert-waiting { border-color: var(--waiting); color: var(--waiting); font-weight: 700; }
+.slab-label.alert-stuck { border-color: var(--stuck); color: var(--stuck); font-weight: 700; }
+.level.all { grid-template-columns: 1fr auto; }
+.level.all .level-name { display: none; }
+
+/* Whole-building view, furnished: the status word under the dot, floor numbers, roof sign. */
+.tag .mini { display: none; }
+.labels.overview .tag { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.labels.overview .tag .mini {
+  display: block; padding: 0 5px; border-radius: 6px; background: rgba(255, 253, 248, 0.92);
+  border: 1px solid var(--line); font-size: 10px; color: var(--ink); white-space: nowrap;
+}
+.labels.overview .tag.status-waiting .mini { border-color: var(--waiting); color: var(--waiting); font-weight: 700; }
+.labels.overview .tag.status-stuck .mini { border-color: var(--stuck); color: var(--stuck); font-weight: 700; }
+.slab-card {
+  display: flex; align-items: center; gap: 8px; padding: 2px 8px 2px 6px; border-left: 6px solid; border-radius: 4px;
+  background: rgba(255, 253, 248, 0.94); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); pointer-events: none;
+}
+.slab-number { font-size: 18px; font-weight: 800; color: #2b2a27; }
+.slab-card .slab-label { padding: 0; border: 0; background: none; font-size: 11px; color: var(--muted); }
+.roof-sign {
+  padding: 4px 14px; border-radius: 6px; background: #2b2a27; color: #fff;
+  font-size: 18px; font-weight: 800; letter-spacing: 2px; pointer-events: none;
+}
+.slab-card.alert-waiting { border-color: var(--waiting) !important; background: #fff3e8; }
+.slab-card.alert-waiting .slab-label { color: var(--waiting); font-weight: 700; }
+.slab-card.alert-stuck { border-color: var(--stuck) !important; background: #fdecec; }
+.slab-card.alert-stuck .slab-label { color: var(--stuck); font-weight: 700; }
+
+.overview-board {
+  width: 220px; padding: 6px 10px 8px; border-radius: 6px; background: #0b1220; color: #e2e8f0;
+  font-size: 11px; line-height: 1.5; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25); pointer-events: none;
+}
+.overview-board .board-head { font-size: 12px; font-weight: 800; letter-spacing: 1px; margin-bottom: 2px; color: #fff; }
+.overview-board .board-row { display: flex; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.overview-board .board-row b { flex: none; border-left: 4px solid; padding-left: 4px; }
+.overview-board .board-row span { overflow: hidden; text-overflow: ellipsis; color: #cbd5e1; }
+.overview-board .board-col-0 b { border-color: #f59e0b; }
+.overview-board .board-col-1 b { border-color: #ef4444; }
+.overview-board .board-col-2 b { border-color: #38bdf8; }

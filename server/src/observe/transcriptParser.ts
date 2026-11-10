@@ -90,6 +90,14 @@ export function toolDetail(tool: string, input: Json): string | undefined {
   }
 }
 
+/** `<command-name>/speclink-apply</command-name>` in a user message: the user typed a slash command. */
+const COMMAND_NAME = /<command-name>\/?([^<\s]+)\s*<\/command-name>/;
+
+/** The skill a typed slash command runs, without its leading slash; undefined without a complete tag. */
+export function slashCommandSkill(text: string): string | undefined {
+  return COMMAND_NAME.exec(text)?.[1];
+}
+
 export function parseLine(line: string, sessionId: string, toolNames: ToolNames, now: number, fallbackCwd = ''): ParsedLine | null {
   let record: unknown;
   try {
@@ -123,6 +131,10 @@ export function parseLine(line: string, sessionId: string, toolNames: ToolNames,
       }
     }
     const texts = userTextBlocks(record as Parameters<typeof userTextBlocks>[0]);
+    for (const text of texts) {
+      const skill = slashCommandSkill(text);
+      if (skill) events.push({ ...base, kind: 'skill.use', actorId: main, skill });
+    }
     if (texts.some((t) => t.includes(INTERRUPTED))) {
       events.push({ ...base, kind: 'turn.end', actorId: main });
     } else if (texts.some((t) => userTextOf(t).length > 0)) {
@@ -160,7 +172,10 @@ export function parseLine(line: string, sessionId: string, toolNames: ToolNames,
           });
         } else if (tool === 'Skill') {
           const skill = str(input.skill);
-          if (skill) events.push({ ...withModel, kind: 'actor.join', actorId: skillActorId(sessionId), tool, toolUseId, skill });
+          if (skill) {
+            events.push({ ...withModel, kind: 'actor.join', actorId: skillActorId(sessionId), tool, toolUseId, skill });
+            events.push({ ...base, kind: 'skill.use', actorId: main, skill });
+          }
         } else if (OUTPUT_TOOLS.has(tool) && detail) {
           events.push({ ...withModel, kind: 'output.add', actorId: main, tool, toolUseId, detail });
         }

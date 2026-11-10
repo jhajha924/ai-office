@@ -1,35 +1,35 @@
 import { describe, expect, it } from 'vitest';
 
-import { TWO_FLOORS } from './fixtures/config.ts';
-import { floorForCwd, floorForProjectDir, floorForSession } from '../server/src/office/floorRouting.ts';
+import { TWO_BUILDINGS } from './fixtures/config.ts';
+import { buildingForCwd, buildingForProjectDir, buildingForSession } from '../server/src/office/floorRouting.ts';
 import { firstUserMessage, labelFromLines, placeholderLabel, shortenLabel } from '../server/src/office/groupLabel.ts';
 import { mcpServerName, mcpWindowName, skillTitle, subagentTitle } from '../server/src/office/roster.ts';
 import { toolStatus } from '../server/src/office/statusText.ts';
 
-const config = TWO_FLOORS;
+const config = TWO_BUILDINGS;
 
 describe('floorRouting', () => {
-  // office-floor-routing spec, Example: 前綴比對結果
+  // office-building-routing spec, Example: 前綴比對結果
   it.each([
     ['D:\\work\\app', '工作樓'],
     ['d:/WORK/tools/', '工作樓'],
     ['D:\\home\\recipes', '私人樓'],
     ['D:\\workX\\demo', '私人樓'],
     ['C:\\Users\\User\\Downloads', '私人樓'],
-  ])('routes cwd %s to %s', (cwd, floor) => {
-    expect(floorForCwd(cwd, config).floor).toBe(floor);
+  ])('routes cwd %s to %s', (cwd, building) => {
+    expect(buildingForCwd(cwd, config).building).toBe(building);
   });
 
   it('prefers the longest matching prefix', () => {
     const nested = {
       ...config,
-      floors: {
-        ...config.floors,
-        rules: [...config.floors.rules, { prefix: 'D:\\work\\dashboard', floor: '看板樓', mask: false }],
+      buildings: {
+        ...config.buildings,
+        rules: [...config.buildings.rules, { prefix: 'D:\\work\\dashboard', building: '看板樓', mask: false }],
       },
     };
-    expect(floorForCwd('D:\\work\\dashboard\\backend', nested)).toEqual({ floor: '看板樓', mask: false });
-    expect(floorForCwd('D:\\work\\app', nested).floor).toBe('工作樓');
+    expect(buildingForCwd('D:\\work\\dashboard\\backend', nested)).toEqual({ building: '看板樓', mask: false });
+    expect(buildingForCwd('D:\\work\\app', nested).building).toBe('工作樓');
   });
 
   it.each([
@@ -38,20 +38,20 @@ describe('floorRouting', () => {
     ['d--home-notes', '私人樓'],
     ['d--workX-demo', '私人樓'],
     ['C--Users-User', '私人樓'],
-  ])('routes project folder %s to %s', (dir, floor) => {
-    expect(floorForProjectDir(dir, config).floor).toBe(floor);
+  ])('routes project folder %s to %s', (dir, building) => {
+    expect(buildingForProjectDir(dir, config).building).toBe(building);
   });
 
-  it('decides a session floor by its start cwd, then its folder, then its latest cwd', () => {
+  it('decides a session building by its start cwd, then its folder, then its latest cwd', () => {
     const temp = 'C:/Users/User/AppData/Local/Temp/x';
-    expect(floorForSession({ cwd: 'D:/work/app', projectDir: 'x' }, temp, config).floor).toBe('工作樓');
-    expect(floorForSession({ projectDir: 'd--work-app' }, temp, config).floor).toBe('工作樓');
-    expect(floorForSession(undefined, 'D:/work/a', config).floor).toBe('工作樓');
+    expect(buildingForSession({ cwd: 'D:/work/app', projectDir: 'x' }, temp, config).building).toBe('工作樓');
+    expect(buildingForSession({ projectDir: 'd--work-app' }, temp, config).building).toBe('工作樓');
+    expect(buildingForSession(undefined, 'D:/work/a', config).building).toBe('工作樓');
   });
 
-  it('carries the mask flag of each floor', () => {
-    expect(floorForCwd('D:\\work\\x', config).mask).toBe(true);
-    expect(floorForCwd('D:\\home\\x', config).mask).toBe(false);
+  it('carries the mask flag of each building', () => {
+    expect(buildingForCwd('D:\\work\\x', config).mask).toBe(true);
+    expect(buildingForCwd('D:\\home\\x', config).mask).toBe(false);
   });
 });
 
@@ -70,7 +70,7 @@ describe('roster', () => {
     expect(subagentTitle(undefined, '私人樓', config)).toBe('支援專員');
   });
 
-  it('applies the floor override before the roster', () => {
+  it('applies the building override before the roster', () => {
     expect(skillTitle('speclink-apply', '工作樓', config)).toBe('專案開發工程師');
     expect(skillTitle('speclink-apply', '私人樓', config)).toBe('開發工程師');
     expect(skillTitle('speclink-review', '工作樓', config)).toBe('品管工程師');
@@ -109,7 +109,7 @@ describe('statusText', () => {
     ['Read', 'D:\\work\\app\\Billing.pas', '讀取 Billing.pas', '讀取檔案'],
     ['Bash', 'sqlcmd -S db -U sa -P secret', '執行指令：sqlcmd -S db -U sa -P secret', '執行指令'],
     ['Agent', '找批價程式', '派出子任務：找批價程式', '派出子任務'],
-  ])('masks %s on a masked floor', (tool, detail, plain, masked) => {
+  ])('masks %s on a masked building', (tool, detail, plain, masked) => {
     expect(toolStatus(tool, detail, false, config)).toBe(plain);
     expect(toolStatus(tool, detail, true, config)).toBe(masked);
   });

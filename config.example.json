@@ -1,9 +1,9 @@
 {
-  "floors": {
+  "buildings": {
     "rules": [
-      { "prefix": "C:\\Projects\\work\\", "floor": "工作樓", "mask": true }
+      { "prefix": "C:\\Projects\\work\\", "building": "工作樓", "mask": true }
     ],
-    "default": { "floor": "私人樓", "mask": false }
+    "default": { "building": "私人樓", "mask": false }
   },
   "roster": {
     "names": ["阿哲", "小安", "阿凱", "小芸", "阿翔", "小婷", "阿傑", "小涵"]

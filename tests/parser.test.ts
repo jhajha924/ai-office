@@ -16,7 +16,7 @@ describe('transcript parser', () => {
     ['thinking block', thinking(), ['thinking']],
     ['text block before the end', text('tool_use'), ['reply']],
     ['Read tool_use', toolUse('Read', 't1', { file_path: 'D:\\a\\b.md' }), ['tool.start']],
-    ['Skill tool_use', toolUse('Skill', 't2', { skill: 'speclink-review' }), ['tool.start', 'actor.join']],
+    ['Skill tool_use', toolUse('Skill', 't2', { skill: 'speclink-review' }), ['tool.start', 'actor.join', 'skill.use']],
     ['Write tool_use', toolUse('Write', 't3', { file_path: 'a.md', content: 'x' }), ['tool.start', 'output.add']],
     ['end_turn', text('end_turn'), ['turn.end']],
     ['not JSON', '{"type":"user", broken', null],
@@ -68,5 +68,32 @@ describe('transcript parser', () => {
     const lines = ['not json', thinking(), '{', toolUse('Bash', 'b1', { command: 'ls' })];
     const all = lines.flatMap((l) => parseLine(l, SID, names, 0)?.events ?? []).map((e) => e.kind);
     expect(all).toEqual(['thinking', 'tool.start']);
+  });
+});
+
+describe('current skill', () => {
+  const skills = (line: string) =>
+    parseLine(line, SID, new Map(), 0)!.events.filter((e) => e.kind === 'skill.use').map((e) => e.skill);
+
+  // office-transcript-observer spec, Example: 產生 skill.use 的紀錄行
+  it.each([
+    ['a Skill call for speclink-review', toolUse('Skill', 't9', { skill: 'speclink-review' }), ['speclink-review']],
+    [
+      'a typed slash command',
+      userText('<command-message>speclink-apply</command-message>\n<command-name>/speclink-apply</command-name>'),
+      ['speclink-apply'],
+    ],
+    ['a mention without the command-name tag', userText('請看 /speclink-apply 的說明'), []],
+    ['an unclosed tag', userText('<command-name>/speclink-apply'), []],
+  ])('%s', (_name, line, expected) => {
+    expect(skills(line)).toEqual(expected);
+  });
+
+  // office-transcript-observer spec, Scenario: 使用者輸入斜線指令
+  it('reads the skill of /speclink-apply with arguments', () => {
+    const line = userText(
+      '<command-message>speclink-apply</command-message>\n<command-name>/speclink-apply</command-name>\n<command-args>ai-office-x</command-args>',
+    );
+    expect(skills(line)).toEqual(['speclink-apply']);
   });
 });

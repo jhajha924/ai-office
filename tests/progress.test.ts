@@ -113,11 +113,11 @@ describe('progress from tasks.md', () => {
   });
 
   // office-transcript-observer spec, Scenario: 工作樓不讀
-  it('never reads a tasks.md for a work-floor session', async () => {
+  it('never reads a tasks.md for a work-building session', async () => {
     const work = project('work', 5, 17);
     const config = {
       ...DEFAULT_CONFIG,
-      floors: { ...DEFAULT_CONFIG.floors, rules: [{ prefix: work, floor: '工作樓', mask: true }] },
+      buildings: { ...DEFAULT_CONFIG.buildings, rules: [{ prefix: work, building: '工作樓', mask: true }] },
     };
     const file = transcript('w1', work);
     fs.appendFileSync(file, `${toolUse('Bash', 'b1', { command: 'speclink task done --change ai-office-cards-feed 3' }, { cwd: work, at: now })}\n`);

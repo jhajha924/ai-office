@@ -58,7 +58,7 @@ export function hookToEvent(body: unknown, now: number) {
 export function createApp(options: AppOptions): App {
   const now = options.now ?? Date.now;
   const store = new OfficeStore();
-  // The demo always shows its own two floors, whatever the user's config says.
+  // The demo always shows its own two buildings, whatever the user's config says.
   const config: ConfigSource = options.demo ? { get: () => DEMO_CONFIG } : options.config;
   // The list of sources is read once, at start-up.
   const sources = options.demo

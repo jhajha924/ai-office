@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { TWO_FLOORS } from './fixtures/config.ts';
+import { TWO_BUILDINGS } from './fixtures/config.ts';
 import { OfficeStore } from '../server/src/office/store.ts';
 import type { OfficeEvent } from '../server/src/office/types.ts';
 import { mainActorId } from '../server/src/office/types.ts';
 import { buildView } from '../server/src/office/view.ts';
 
-const config = TWO_FLOORS;
+const config = TWO_BUILDINGS;
 const MIN = 60_000;
 const T0 = new Date(2026, 9, 31, 10, 0, 0).getTime();
 const cwd = 'D:/home/x';

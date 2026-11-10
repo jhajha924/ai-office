@@ -1,8 +1,9 @@
 import type { ActorView, GroupView, OfficeView } from '../../server/src/office/types.ts';
+import type { LevelChoice } from './levels.ts';
 import { STATUS_TEXT, TEXT } from './text.ts';
 
 /**
- * The card strip along the bottom: one card per employee on the floor being
+ * The card strip along the bottom: one card per employee on the building being
  * viewed. A card that leaves stays a few seconds in a fading state, so a
  * "交回" arc still has a card to start from.
  */
@@ -29,7 +30,7 @@ export interface CardModel {
   tags: { token: string; name: string }[];
   /** Outputs beyond the shown tags. */
   more: number;
-  /** "N 個檔案" on a masked floor, where no names are given. */
+  /** "N 個檔案" on a masked building, where no names are given. */
   countText?: string;
 }
 
@@ -75,7 +76,8 @@ export class CardStrip {
   /** Cards of employees that just left, with when they go away. */
   private leaving = new Map<string, { card: HTMLElement; until: number }>();
   private shown = new Map<string, HTMLElement>();
-  private floor?: string;
+  /** Building and floor on screen, as one key. */
+  private where?: string;
 
   constructor(root: HTMLElement, handlers: CardHandlers) {
     this.root = root;
@@ -87,14 +89,16 @@ export class CardStrip {
     return this.shown.get(actorId) ?? this.leaving.get(actorId)?.card;
   }
 
-  render(view: OfficeView, floor: string, now = Date.now()): void {
-    const groups = view.groups.filter((g) => g.floor === floor);
+  /** The cards of one building: all its floors, or one. */
+  render(view: OfficeView, building: string, level: LevelChoice, now = Date.now()): void {
+    const groups = view.groups.filter((g) => g.building === building && (level === 'all' || g.level === level));
     const next = new Map<string, HTMLElement>();
     for (const group of groups) for (const actor of group.actors) next.set(actor.id, this.card(actor, group));
 
-    // Switching floors is not anyone leaving: the other floor's cards just go.
-    if (floor !== this.floor) {
-      this.floor = floor;
+    // Switching building or floor is not anyone leaving: the other floor's cards just go.
+    const where = `${building}#${level}`;
+    if (where !== this.where) {
+      this.where = where;
       this.shown.clear();
       this.leaving.clear();
     }

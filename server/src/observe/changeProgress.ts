@@ -7,7 +7,7 @@ import type { ChangeHint } from './transcriptParser.ts';
 /**
  * Progress of the speclink / spectra change a session works on: the ratio of
  * checked boxes in its tasks.md. Only ever called for sessions on an unmasked
- * floor — the watcher decides that; this module just reads and counts.
+ * building — the watcher decides that; this module just reads and counts.
  */
 
 const DONE = /^\s*- \[[xX]\]/;

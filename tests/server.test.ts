@@ -41,8 +41,8 @@ function request(port: number, opts: { method?: string; path: string; host?: str
 }
 
 const emptyView = (groups = 0): OfficeView => ({
-  floors: [{ name: '私人樓', masked: false, stats: { working: groups, outputs: 0, waiting: 0 } }],
-  groups: Array.from({ length: groups }, (_, i) => ({ sessionId: `s${i}`, floor: '私人樓', label: `g${i}`, actors: [], lastActivity: 0 })),
+  buildings: [{ name: '私人樓', masked: false, stats: { working: groups, outputs: 0, waiting: 0 }, levels: [] }],
+  groups: Array.from({ length: groups }, (_, i) => ({ sessionId: `s${i}`, building: '私人樓', level: 1, label: `g${i}`, actors: [], lastActivity: 0 })),
   feed: [],
   handoffs: [],
   generatedAt: Date.now(),

@@ -55,7 +55,7 @@ export interface OfficeServer {
 
 /** The view without its timestamp, to tell whether anything visible changed. */
 function viewKey(view: OfficeView): string {
-  return JSON.stringify({ floors: view.floors, groups: view.groups });
+  return JSON.stringify({ buildings: view.buildings, groups: view.groups });
 }
 
 export function createOfficeServer(options: OfficeServerOptions): OfficeServer {

@@ -1,16 +1,17 @@
 import type { OfficeConfig } from './config.ts';
 import { buildFeed, buildHandoffs, nameFor, outputToken } from './feed.ts';
-import { floorForSession, floorList } from './floorRouting.ts';
+import { buildingForSession, buildingList } from './floorRouting.ts';
 import { placeholderLabel } from './groupLabel.ts';
 import { skillTitle, subagentTitle } from './roster.ts';
 import { baseName, STATE_BUBBLES, subtaskStatus, toolStatus } from './statusText.ts';
 import type { ActorState, GroupState, OfficeStore } from './store.ts';
 import { startOfLocalDay } from './store.ts';
-import type { ActorStatus, ActorView, FloorView, GroupView, ModelFamily, OfficeView, OutputRef } from './types.ts';
+import type { ActorStatus, ActorView, BuildingView, GroupView, ModelFamily, OfficeView, OutputRef } from './types.ts';
+import { levelForSkills, levelList } from './levels.ts';
 
 /**
- * The processing station: store state → OfficeView. Floor, title, Chinese
- * status and masking all happen here, on the server, so a masked floor's file
+ * The processing station: store state → OfficeView. Building, title, Chinese
+ * status and masking all happen here, on the server, so a masked building's file
  * names, commands and subtask descriptions never reach the browser. The view
  * carries no cwd, no full path and no raw detail.
  */
@@ -72,7 +73,7 @@ function sessionOutputs(store: OfficeStore, sessionId: string, now: number): { p
 function actorView(
   actor: ActorState,
   group: GroupState,
-  floor: string,
+  building: string,
   mask: boolean,
   now: number,
   config: OfficeConfig,
@@ -93,7 +94,7 @@ function actorView(
       tool = undefined;
     } else if (skill && actor.status === 'running') {
       // While a skill employee is in, the work shows on its bubble instead.
-      bubble = `交給 ${skillTitle(skill.skill ?? '', floor, config)}`;
+      bubble = `交給 ${skillTitle(skill.skill ?? '', building, config)}`;
       tool = undefined;
     }
   }
@@ -105,8 +106,8 @@ function actorView(
     actor.role === 'main'
       ? MAIN_TITLE
       : actor.role === 'subagent'
-        ? subagentTitle(actor.subagentType, floor, config)
-        : skillTitle(actor.skill ?? '', floor, config);
+        ? subagentTitle(actor.subagentType, building, config)
+        : skillTitle(actor.skill ?? '', building, config);
 
   const task = actor.role === 'main' ? label : actor.role === 'subagent' ? subtaskStatus(actor.detail, mask) : title;
 
@@ -148,35 +149,41 @@ export function buildView(store: OfficeStore, config: OfficeConfig, now: number)
   const groups: GroupView[] = [];
   for (const group of store.groups.values()) {
     if (now - group.lastActivity >= config.timing.groupLeaveMs) continue;
-    const { floor, mask } = floorForSession(store.homes.get(group.sessionId), group.cwd, config);
+    const { building, mask } = buildingForSession(store.homes.get(group.sessionId), group.cwd, config);
     const label = group.label ?? placeholderLabel(group.sessionId);
-    const actors = [...group.actors.values()].map((a) => actorView(a, group, floor, mask, now, config, store, label));
+    const actors = [...group.actors.values()].map((a) => actorView(a, group, building, mask, now, config, store, label));
     groups.push({
       sessionId: group.sessionId,
-      floor,
+      building,
+      level: levelForSkills(group.skills, config),
       label,
       actors,
       lastActivity: group.lastActivity,
     });
   }
 
-  const floors: FloorView[] = floorList(config).map((f) => ({
-    name: f.floor,
-    masked: f.mask,
+  const newBuilding = (name: string, masked: boolean): BuildingView => ({
+    name,
+    masked,
     stats: { working: 0, outputs: 0, waiting: 0 },
-  }));
-  const floorOf = (name: string): FloorView => {
-    let found = floors.find((f) => f.name === name);
+    levels: levelList(config),
+  });
+  const buildings: BuildingView[] = buildingList(config).map((f) => newBuilding(f.building, f.mask));
+  const buildingOf = (name: string): BuildingView => {
+    let found = buildings.find((f) => f.name === name);
     if (!found) {
-      found = { name, masked: false, stats: { working: 0, outputs: 0, waiting: 0 } };
-      floors.push(found);
+      found = newBuilding(name, false);
+      buildings.push(found);
     }
     return found;
   };
 
   for (const group of groups) {
     const main = group.actors.find((a) => a.role === 'main');
-    const stats = floorOf(group.floor).stats;
+    const home = buildingOf(group.building);
+    const level = home.levels.find((l) => l.level === group.level);
+    if (level) level.groups += 1;
+    const stats = home.stats;
     if (main && WORKING.has(main.status)) stats.working += 1;
     if (main && main.status === 'waiting') stats.waiting += 1;
   }
@@ -185,12 +192,12 @@ export function buildView(store: OfficeStore, config: OfficeConfig, now: number)
   const seen = new Map<string, Set<string>>();
   for (const output of store.outputs) {
     if (output.at < today || output.at > now) continue;
-    const floor = floorForSession(store.homes.get(output.sessionId), output.cwd, config).floor;
-    const files = seen.get(floor) ?? new Set<string>();
+    const building = buildingForSession(store.homes.get(output.sessionId), output.cwd, config).building;
+    const files = seen.get(building) ?? new Set<string>();
     files.add(output.path.replace(/\\/g, '/').toLowerCase());
-    seen.set(floor, files);
+    seen.set(building, files);
   }
-  for (const [floor, files] of seen) floorOf(floor).stats.outputs = files.size;
+  for (const [building, files] of seen) buildingOf(building).stats.outputs = files.size;
 
-  return { floors, groups, feed: buildFeed(store, config), handoffs: buildHandoffs(store, config, now), generatedAt: now };
+  return { buildings, groups, feed: buildFeed(store, config), handoffs: buildHandoffs(store, config, now), generatedAt: now };
 }

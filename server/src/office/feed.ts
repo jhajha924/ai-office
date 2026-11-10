@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { OfficeConfig } from './config.ts';
-import { floorForSession } from './floorRouting.ts';
+import { buildingForSession } from './floorRouting.ts';
 import { placeholderLabel } from './groupLabel.ts';
 import { subagentTitle } from './roster.ts';
 import { clip } from './statusText.ts';
@@ -12,7 +12,7 @@ import { mainActorId } from './types.ts';
 /**
  * The people side of the processing station: employee names, activity feed
  * text, hand-off arcs and output tokens. Like the rest of the station it masks
- * on the server, so a masked floor's subtask descriptions never leave it.
+ * on the server, so a masked building's subtask descriptions never leave it.
  */
 
 /** Feed entries in a view, newest first. */
@@ -57,26 +57,26 @@ export function resolveOutputToken(store: OfficeStore, token: string): { session
   return undefined;
 }
 
-function recordText(record: FeedRecord, store: OfficeStore, config: OfficeConfig): { floor: string; text: string } {
-  const { floor, mask } = floorForSession(store.homes.get(record.sessionId), record.cwd, config);
+function recordText(record: FeedRecord, store: OfficeStore, config: OfficeConfig): { building: string; text: string } {
+  const { building, mask } = buildingForSession(store.homes.get(record.sessionId), record.cwd, config);
   const main = nameFor(mainActorId(record.sessionId), config);
   const label = store.groups.get(record.sessionId)?.label ?? record.label ?? placeholderLabel(record.sessionId);
-  const sub = () => `${nameFor(record.actorId, config)}（${subagentTitle(record.subagentType, floor, config)}）`;
+  const sub = () => `${nameFor(record.actorId, config)}（${subagentTitle(record.subagentType, building, config)}）`;
   switch (record.kind) {
     case 'done':
-      return { floor, text: `${main} 完成：${label}` };
+      return { building, text: `${main} 完成：${label}` };
     case 'waiting':
-      return { floor, text: `${main} 等你：${label}` };
+      return { building, text: `${main} 等你：${label}` };
     case 'handoff': {
       const what = mask || !record.detail?.trim() ? '派出子任務' : clip(record.detail, DETAIL_MAX_CHARS);
-      return { floor, text: `${main} → ${sub()}：${what}` };
+      return { building, text: `${main} → ${sub()}：${what}` };
     }
     case 'return':
-      return { floor, text: `${sub()}→ ${main} 交回` };
+      return { building, text: `${sub()}→ ${main} 交回` };
   }
 }
 
-/** The latest feed entries, newest first, with their floor and masked text. */
+/** The latest feed entries, newest first, with their building and masked text. */
 export function buildFeed(store: OfficeStore, config: OfficeConfig): FeedEntryView[] {
   return store.feed
     .slice(-FEED_SHOWN)
@@ -90,10 +90,10 @@ export function buildHandoffs(store: OfficeStore, config: OfficeConfig, now: num
   for (const record of store.feed) {
     if (record.kind !== 'handoff' && record.kind !== 'return') continue;
     if (record.at > now || now - record.at >= HANDOFF_WINDOW_MS) continue;
-    const { floor, text } = recordText(record, store, config);
+    const { building, text } = recordText(record, store, config);
     const main = mainActorId(record.sessionId);
     const [from, to] = record.kind === 'handoff' ? [main, record.actorId] : [record.actorId, main];
-    out.push({ id: `f${record.seq}`, at: record.at, floor, from, to, label: text });
+    out.push({ id: `f${record.seq}`, at: record.at, building, from, to, label: text });
   }
   return out;
 }

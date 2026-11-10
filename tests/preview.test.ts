@@ -34,7 +34,7 @@ describe('output preview', () => {
   let store: OfficeStore;
   const config = () => ({
     ...DEFAULT_CONFIG,
-    floors: { ...DEFAULT_CONFIG.floors, rules: [{ prefix: work, floor: '工作樓', mask: true }] },
+    buildings: { ...DEFAULT_CONFIG.buildings, rules: [{ prefix: work, building: '工作樓', mask: true }] },
   });
 
   /** Writes a file the session "wrote today" and returns its token. */
@@ -56,7 +56,7 @@ describe('output preview', () => {
     store.setHome('w', { cwd: work });
     server = createOfficeServer({
       port: 0,
-      getView: () => ({ floors: [], groups: [], feed: [], handoffs: [], generatedAt: 0 }),
+      getView: () => ({ buildings: [], groups: [], feed: [], handoffs: [], generatedAt: 0 }),
       subscribe: () => () => {},
       onHook: () => {},
       getOutput: (token) => previewOutput(store, config(), token),
@@ -85,7 +85,7 @@ describe('output preview', () => {
   });
 
   // office-staff-cards spec, Scenario: 遮罩樓層的預覽請求
-  it('answers 403 「此樓層不提供預覽」 for a masked-floor file and never reads it', async () => {
+  it('answers 403 「此樓層不提供預覽」 for a masked-building file and never reads it', async () => {
     const token = output('w', work, 'Billing.pas', 'secret');
     const res = await get(port, `/api/output/${token}`);
     expect(res.status).toBe(403);

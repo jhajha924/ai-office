@@ -47,19 +47,19 @@ function pointAt(g: ArcGeometry, t: number): { x: number; y: number } {
 }
 
 /**
- * The hand-offs to draw now: on this floor, not drawn before, both cards on
+ * The hand-offs to draw now: on this building, not drawn before, both cards on
  * screen (`boxOf` returns undefined otherwise). Marks them drawn, so each is
  * drawn once.
  */
 export function newArcs(
   handoffs: HandoffView[],
-  floor: string,
+  building: string,
   drawn: Set<string>,
   boxOf: (actorId: string) => Box | undefined,
 ): { id: string; geometry: ArcGeometry; label: string }[] {
   const out: { id: string; geometry: ArcGeometry; label: string }[] = [];
   for (const h of handoffs) {
-    if (drawn.has(h.id) || h.floor !== floor) continue;
+    if (drawn.has(h.id) || h.building !== building) continue;
     const from = boxOf(h.from);
     const to = boxOf(h.to);
     if (!from || !to) continue;
@@ -77,13 +77,13 @@ export class ArcLayer {
     this.svg = svg;
   }
 
-  /** Draws the new hand-offs of this floor whose two cards are on screen. */
-  draw(handoffs: HandoffView[], floor: string, cardOf: (actorId: string) => HTMLElement | undefined): void {
+  /** Draws the new hand-offs of this building whose two cards are on screen. */
+  draw(handoffs: HandoffView[], building: string, cardOf: (actorId: string) => HTMLElement | undefined): void {
     const boxOf = (id: string): Box | undefined => {
       const card = cardOf(id);
       return card && onScreen(card) ? card.getBoundingClientRect() : undefined;
     };
-    for (const arc of newArcs(handoffs, floor, this.drawn, boxOf)) this.animate(arc.geometry, arc.label);
+    for (const arc of newArcs(handoffs, building, this.drawn, boxOf)) this.animate(arc.geometry, arc.label);
   }
 
   private animate(g: ArcGeometry, label: string): void {

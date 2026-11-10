@@ -2,10 +2,10 @@ import type { Cell, Pod, Seat } from './layout.ts';
 import { POD_ORDER, PODS } from './layout.ts';
 
 /**
- * Which pod each group sits at, one allocator per floor. A new group takes
+ * Which pod each group sits at, one allocator per floor of each building. A new group takes
  * the first free pod in POD_ORDER (nearest the door first) and keeps it while
  * it stays; a group that leaves frees its pod for the next newcomer. Groups
- * beyond the 12 pods get none: they are listed in the sidebar only.
+ * beyond the floor's pods get none: they are listed in the sidebar only.
  */
 export class PodAllocator {
   private bySession = new Map<string, number>();
@@ -17,7 +17,7 @@ export class PodAllocator {
     this.order = order;
   }
 
-  /** Reconcile with the groups now on this floor (in arrival order). */
+  /** Reconcile with the groups now on this building (in arrival order). */
   update(sessionIds: string[]): void {
     const present = new Set(sessionIds);
     for (const id of [...this.bySession.keys()]) if (!present.has(id)) this.bySession.delete(id);
@@ -33,10 +33,10 @@ export class PodAllocator {
 
   podOf(sessionId: string): Pod | undefined {
     const index = this.bySession.get(sessionId);
-    return index === undefined ? undefined : this.pods[index];
+    return index === undefined ? undefined : this.pods.find((p) => p.index === index);
   }
 
-  /** Sessions on this floor without a pod. */
+  /** Sessions on this building without a pod. */
   overflow(sessionIds: string[]): string[] {
     return sessionIds.filter((id) => !this.bySession.has(id));
   }

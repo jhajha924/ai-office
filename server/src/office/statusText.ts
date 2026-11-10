@@ -2,11 +2,11 @@ import type { OfficeConfig } from './config.ts';
 import { mcpWindowName } from './roster.ts';
 
 /**
- * Chinese status bubbles, with masking for floors that hide details.
+ * Chinese status bubbles, with masking for buildings that hide details.
  *
- * A masked floor keeps only the kind of action: no file names, commands or
+ * A masked building keeps only the kind of action: no file names, commands or
  * subtask descriptions. Tool names are not sensitive, so an unknown tool still
- * shows as "使用 <tool>" on every floor.
+ * shows as "使用 <tool>" on every building.
  */
 
 const COMMAND_MAX_CHARS = 40;

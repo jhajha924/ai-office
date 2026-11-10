@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { OfficeConfig } from '../server/src/office/config.ts';
 import { createConfigSource, DEFAULT_CONFIG } from '../server/src/office/config.ts';
-import { TWO_FLOORS } from './fixtures/config.ts';
+import { TWO_BUILDINGS } from './fixtures/config.ts';
 import { HANDOFF_WINDOW_MS, nameFor, outputToken } from '../server/src/office/feed.ts';
 import { FEED_KEEP, OfficeStore } from '../server/src/office/store.ts';
 import type { ActorView, OfficeEvent } from '../server/src/office/types.ts';
@@ -20,7 +20,7 @@ const WORK = 'D:\\work\\app';
 function ev(sessionId: string, cwd: string, kind: OfficeEvent['kind'], extra: Partial<OfficeEvent> = {}): OfficeEvent {
   return { kind, source: 'observe', sessionId, actorId: mainActorId(sessionId), cwd, at: T0, ...extra };
 }
-const actor = (store: OfficeStore, id: string, now = T0 + 1, config: OfficeConfig = TWO_FLOORS): ActorView =>
+const actor = (store: OfficeStore, id: string, now = T0 + 1, config: OfficeConfig = TWO_BUILDINGS): ActorView =>
   buildView(store, config, now).groups.flatMap((g) => g.actors).find((a) => a.id === id)!;
 
 describe('config: names and dozing threshold', () => {
@@ -76,7 +76,7 @@ describe('names and current task', () => {
     expect(actor(store, skillActorId('s')).task).toBe('品管工程師');
   });
 
-  it('masks a work-floor sub-agent task', () => {
+  it('masks a work-building sub-agent task', () => {
     const store = new OfficeStore();
     store.apply(ev('w', WORK, 'handoff.out', { actorId: subActorId('w', 't1'), subagentType: 'Explore', detail: '找批價程式' }));
     expect(actor(store, subActorId('w', 't1')).task).toBe('處理子任務');
@@ -120,14 +120,14 @@ function sessionNamed(prefix: string): string {
 }
 
 describe('activity feed', () => {
-  const feedOf = (store: OfficeStore, now = T0 + 10) => buildView(store, TWO_FLOORS, now).feed;
+  const feedOf = (store: OfficeStore, now = T0 + 10) => buildView(store, TWO_BUILDINGS, now).feed;
 
   // office-activity-feed spec, Example: 動態文字
   it.each([
     ['私人樓', HOME, '週報整理', '查本週銷售數字', '阿哲 → 小安（資料調查員）：查本週銷售數字'],
     ['工作樓', WORK, 'Billing 同群組批價更新', '找批價程式', '阿哲 → 小安（資料調查員）：派出子任務'],
-  ])('writes the four kinds on the %s', (floor, cwd, label, detail, handoffText) => {
-    const s = sessionNamed(floor === '私人樓' ? 'p' : 'w');
+  ])('writes the four kinds on the %s', (building, cwd, label, detail, handoffText) => {
+    const s = sessionNamed(building === '私人樓' ? 'p' : 'w');
     const store = new OfficeStore();
     store.apply(ev(s, cwd, 'turn.start'));
     store.setLabel(s, label);
@@ -137,14 +137,14 @@ describe('activity feed', () => {
     store.apply(ev(s, cwd, 'handoff.back', { actorId: subActorId(s, 't1'), at: T0 + 4 }));
     store.apply(ev(s, cwd, 'turn.end', { at: T0 + 5 }));
     const feed = feedOf(store);
-    expect(feed.map((f) => [f.kind, f.text, f.floor])).toEqual([
-      ['done', `阿哲 完成：${label}`, floor],
-      ['return', '小安（資料調查員）→ 阿哲 交回', floor],
-      ['handoff', handoffText, floor],
-      ['waiting', `阿哲 等你：${label}`, floor],
+    expect(feed.map((f) => [f.kind, f.text, f.building])).toEqual([
+      ['done', `阿哲 完成：${label}`, building],
+      ['return', '小安（資料調查員）→ 阿哲 交回', building],
+      ['handoff', handoffText, building],
+      ['waiting', `阿哲 等你：${label}`, building],
     ]);
     // The label stays visible by the user's decision; the subtask description must not.
-    if (floor === '工作樓') expect(JSON.stringify(buildView(store, TWO_FLOORS, T0 + 10))).not.toContain(detail);
+    if (building === '工作樓') expect(JSON.stringify(buildView(store, TWO_BUILDINGS, T0 + 10))).not.toContain(detail);
   });
 
   // office-activity-feed spec, Scenario: 等你只記一次
@@ -172,7 +172,7 @@ describe('hand-offs for the arcs', () => {
   it('keeps a hand-off for 15 seconds', () => {
     const store = new OfficeStore();
     store.apply(ev('s', HOME, 'handoff.out', { actorId: subActorId('s', 't1'), subagentType: 'Explore' }));
-    const at = (ms: number) => buildView(store, TWO_FLOORS, T0 + ms).handoffs;
+    const at = (ms: number) => buildView(store, TWO_BUILDINGS, T0 + ms).handoffs;
     expect(at(14_000)).toHaveLength(1);
     expect(at(HANDOFF_WINDOW_MS)).toHaveLength(0);
     expect(at(14_000)[0]).toMatchObject({ from: mainActorId('s'), to: subActorId('s', 't1') });
@@ -182,20 +182,20 @@ describe('hand-offs for the arcs', () => {
     const store = new OfficeStore();
     store.apply(ev('s', HOME, 'handoff.out', { actorId: subActorId('s', 't1') }));
     store.apply(ev('s', HOME, 'handoff.back', { actorId: subActorId('s', 't1'), at: T0 + 1 }));
-    const back = buildView(store, TWO_FLOORS, T0 + 2).handoffs[1];
+    const back = buildView(store, TWO_BUILDINGS, T0 + 2).handoffs[1];
     expect(back).toMatchObject({ from: subActorId('s', 't1'), to: mainActorId('s') });
   });
 });
 
 describe('outputs on the main card', () => {
   // office-staff-cards spec, Scenario: 工作樓產出
-  it('gives a work-floor card only a count', () => {
+  it('gives a work-building card only a count', () => {
     const store = new OfficeStore();
     store.apply(ev('w', WORK, 'output.add', { tool: 'Edit', detail: 'D:\\work\\app\\Billing.pas' }));
     const main = actor(store, mainActorId('w'));
     expect(main.outputCount).toBe(1);
     expect(main.outputs).toBeUndefined();
-    expect(JSON.stringify(buildView(store, TWO_FLOORS, T0 + 1))).not.toContain('Billing');
+    expect(JSON.stringify(buildView(store, TWO_BUILDINGS, T0 + 1))).not.toContain('Billing');
   });
 
   // office-staff-cards spec, Scenario: 私人樓多個產出
@@ -232,8 +232,8 @@ describe('progress shown on the cards', () => {
     ['私人樓', false, 'main', 'thinking', 'indeterminate'],
     ['工作樓', false, 'main', 'running', 'indeterminate'],
     ['工作樓', false, 'main', 'idle', undefined],
-  ] as const)('%s, known=%s, %s %s → %j', (floor, known, who, status, expected) => {
-    const store = setup(floor === '私人樓' ? HOME : WORK, known);
+  ] as const)('%s, known=%s, %s %s → %j', (building, known, who, status, expected) => {
+    const store = setup(building === '私人樓' ? HOME : WORK, known);
     let now = T0 + 1;
     if (status === 'done') store.apply(ev('s', HOME, 'turn.end', { at: T0 + 1 }));
     if (status === 'thinking') store.apply(ev('s', HOME, 'tool.end', { toolUseId: 'b', at: T0 + 1 }));

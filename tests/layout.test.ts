@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { blockedCells, cellKey, DOOR, FURNITURE, GRID_H, GRID_W, PODS } from '../web/src/scene/layout.ts';
+import { blockedCells, PLANS } from '../web/src/scene/floorPlans.ts';
+import { cellKey, DOOR, GRID_H, GRID_W, PODS } from '../web/src/scene/layout.ts';
+
+const FURNITURE = PLANS.build.furniture;
 import { findPath } from '../web/src/scene/pathfinding.ts';
 import { placeFor, PodAllocator } from '../web/src/scene/podAllocator.ts';
 
@@ -33,8 +36,8 @@ describe('pod allocation', () => {
   });
 });
 
-describe('floor plan', () => {
-  const blocked = blockedCells();
+describe('building plan', () => {
+  const blocked = blockedCells(PLANS.build);
 
   it('keeps every seat, standing cell and the door walkable and inside the grid', () => {
     const cells = [DOOR, ...PODS.flatMap((p) => [...p.seats, ...p.standing])];

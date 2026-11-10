@@ -53,7 +53,7 @@ function blocklist(): string[] {
 
 describe('demo mode', () => {
   // office-event-stream spec, Scenario: 示範模式
-  it('covers both floors, six groups and every special state within a minute, without reading files', async () => {
+  it('covers both buildings, six groups and every special state within a minute, without reading files', async () => {
     vi.useFakeTimers();
     let clock = new Date(2026, 9, 31, 10, 0, 0).getTime();
     const store = new OfficeStore();
@@ -91,7 +91,7 @@ describe('demo mode', () => {
       if (actors.some((a) => typeof a.progress === 'object')) seen.progress = true;
       if (view.feed.some((f) => f.kind === 'handoff')) seen.handoffFeed = true;
       if (view.feed.some((f) => f.kind === 'done')) seen.doneFeed = true;
-      expect(new Set(view.groups.map((g) => g.floor))).toEqual(new Set(['工作樓', '私人樓']));
+      expect(new Set(view.groups.map((g) => g.building))).toEqual(new Set(['工作樓', '私人樓']));
       expect(view.groups).toHaveLength(6);
       clock += 1_000;
       vi.advanceTimersByTime(1_000);
@@ -114,7 +114,7 @@ describe('demo mode', () => {
     expect(touched).toEqual([]);
   });
 
-  it('keeps the work-floor details masked in the demo too', () => {
+  it('keeps the work-building details masked in the demo too', () => {
     vi.useFakeTimers();
     let clock = new Date(2026, 9, 31, 10, 0, 0).getTime();
     const store = new OfficeStore();
@@ -130,13 +130,51 @@ describe('demo mode', () => {
     demo.stop();
   });
 
+  // office-event-stream spec, Example: 示範小組的樓層
+  it('spreads the groups over 1F, 5F, 6F and 7F and moves one from 5F to 6F every minute', () => {
+    vi.useFakeTimers();
+    let clock = new Date(2026, 9, 31, 10, 0, 0).getTime();
+    const store = new OfficeStore();
+    const demo = new DemoSource(store, () => clock);
+    demo.start();
+    const seen = new Map<string, Set<number>>();
+    const steps: number[] = [];
+    let firstOnSix: number | undefined;
+    for (let s = 0; s < DEMO_LOOP_MS / 1_000; s++) {
+      const view = buildView(store, DEMO_CONFIG, clock);
+      for (const g of view.groups) {
+        const key = `${g.building} ${g.label}`;
+        if (!seen.has(key)) seen.set(key, new Set());
+        seen.get(key)!.add(g.level);
+        if (g.label === '本週銷售週報') {
+          steps.push(g.level);
+          if (g.level === 6 && firstOnSix === undefined) firstOnSix = s;
+        }
+      }
+      clock += 1_000;
+      vi.advanceTimersByTime(1_000);
+    }
+    demo.stop();
+    const levels = (key: string) => [...(seen.get(key) ?? [])].sort();
+    expect(levels('工作樓 庫存 API 批次更新')).toEqual([5]);
+    expect(levels('工作樓 帳單匯出欄位調整')).toEqual([1]);
+    expect(levels('工作樓 月結報表檢查')).toEqual([7]);
+    expect(levels('私人樓 本週銷售週報')).toEqual([5, 6]);
+    expect(levels('私人樓 相簿網站改版')).toEqual([5]);
+    expect(levels('私人樓 食譜整理')).toEqual([1]);
+    // 5F first, then 6F from second 29 on: exactly one move.
+    const moves = steps.filter((l, i) => i > 0 && l !== steps[i - 1]);
+    expect(moves).toEqual([6]);
+    expect(firstOnSix).toBe(29);
+  });
+
   // office-event-stream spec, Scenario: 沒有設定檔也能看到兩樓層示範
-  it('shows both floors even when the user config is the single-floor default', async () => {
+  it('shows both buildings even when the user config is the single-building default', async () => {
     const app = createApp({ port: 0, config: { get: () => DEFAULT_CONFIG }, demo: true, projectsDir: 'unused' });
     const port = await app.start();
     try {
-      const view = (await (await fetch(`http://127.0.0.1:${port}/api/state`)).json()) as { floors: { name: string }[] };
-      expect(view.floors.map((f) => f.name)).toEqual(['工作樓', '私人樓']);
+      const view = (await (await fetch(`http://127.0.0.1:${port}/api/state`)).json()) as { buildings: { name: string }[] };
+      expect(view.buildings.map((f) => f.name)).toEqual(['工作樓', '私人樓']);
       expect(app.sources).toEqual([]);
     } finally {
       await app.stop();

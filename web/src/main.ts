@@ -2,23 +2,28 @@ import './style.css';
 
 import type { OfficeView } from '../../server/src/office/types.ts';
 import { ArcLayer } from './arcs.ts';
+import { boardContent } from './board.ts';
 import { CardStrip, openPreview } from './cards.ts';
 import { renderFeed } from './feed.ts';
+import type { LevelChoice } from './levels.ts';
+import { levelSummary, pickLevel, roomName } from './levels.ts';
 import { hourFromQuery, phaseAt } from './scene/daylight.ts';
 import { Office } from './scene/office.ts';
 import { applyStaticText } from './text.ts';
-import { pickFloor, Ui } from './ui.ts';
+import { pickBuilding, Ui } from './ui.ts';
 
 /**
  * Wires the page: one SSE connection to /events, every snapshot or view goes
  * to the 3D office, the card strip, the feed, the hand-off arcs and the HTML
- * around them. When the stream drops, a banner shows and the page reconnects
- * every 3 seconds; the next snapshot replaces the whole state.
+ * around them. One building is on screen at a time: all its floors, or one.
+ * When the stream drops, a banner shows and the page reconnects every 3
+ * seconds; the next snapshot replaces the whole state.
  */
 
 const RECONNECT_MS = 3_000;
 const PHASE_CHECK_MS = 60_000;
-const FLOOR_KEY = 'ai-office.floor';
+const BUILDING_KEY = 'ai-office.floor';
+const LEVEL_KEY = (building: string) => `ai-office.level.${building}`;
 
 applyStaticText(document);
 
@@ -26,61 +31,101 @@ const office = new Office(document.getElementById('office')!);
 const arcs = new ArcLayer(document.getElementById('arcs') as unknown as SVGSVGElement);
 const feedList = document.getElementById('feed')!;
 let view: OfficeView | undefined;
-/** The remembered floor until the first view says which floors exist. */
-let floor = readFloor() ?? '';
+/** The remembered building until the first view says which buildings exist. */
+let building = read(BUILDING_KEY) ?? '';
+let level: LevelChoice = 'all';
 
 const cards = new CardStrip(document.getElementById('cards')!, {
-  onFocus: (sessionId) => office.focusGroup(floor, sessionId),
+  onFocus: (sessionId) => focus(sessionId),
   onPreview: (token, name) => void openPreview(token, name),
 });
 
 const ui = new Ui({
-  onFloor(next) {
-    floor = next;
-    saveFloor(next);
-    office.setFloor(next);
-    render();
+  onBuilding(next) {
+    building = next;
+    save(BUILDING_KEY, next);
+    level = savedLevel(next);
+    show();
   },
+  onLevel: chooseLevel,
   onGroup(sessionId) {
-    office.focusGroup(floor, sessionId);
+    const group = view?.groups.find((g) => g.sessionId === sessionId);
+    if (group && group.level !== level) {
+      level = group.level;
+      save(LEVEL_KEY(building), String(level));
+      show();
+    }
+    focus(sessionId);
   },
 });
 
-function readFloor(): string | undefined {
+/** The whole building or one floor, from the floor buttons or a click on a slab. */
+function chooseLevel(next: LevelChoice): void {
+  level = next;
+  save(LEVEL_KEY(building), String(next));
+  show();
+}
+office.onPickLevel = chooseLevel;
+
+/** Glide the camera to a group, on whatever floor it is. */
+function focus(sessionId: string): void {
+  const group = view?.groups.find((g) => g.sessionId === sessionId);
+  if (group) office.focusGroup(building, group.level, sessionId);
+}
+
+function read(key: string): string | undefined {
   try {
-    return localStorage.getItem(FLOOR_KEY) ?? undefined;
+    return localStorage.getItem(key) ?? undefined;
   } catch {
     return undefined;
   }
 }
 
-function saveFloor(value: string): void {
+function save(key: string, value: string): void {
   try {
-    localStorage.setItem(FLOOR_KEY, value);
+    localStorage.setItem(key, value);
   } catch {
-    // Storage unavailable: the tab just is not remembered.
+    // Storage unavailable: the choice just is not remembered.
   }
 }
 
-function render(): void {
+/** What to show in a building: the floor last looked at there, else the whole building (see pickLevel). */
+function savedLevel(name: string): LevelChoice {
+  const levels = view?.buildings.find((b) => b.name === name)?.levels ?? [];
+  const raw = read(LEVEL_KEY(name));
+  const saved = raw === 'all' ? 'all' : raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : undefined;
+  return pickLevel(saved, levels);
+}
+
+/** Settle building and floor against the view, point the scene at them, and redraw. */
+function show(): void {
   if (!view) return;
-  const shown = pickFloor(floor, view.floors.map((f) => f.name));
-  if (shown !== floor) {
-    floor = shown;
-    office.setFloor(floor);
+  const nextBuilding = pickBuilding(building, view.buildings.map((b) => b.name));
+  if (nextBuilding !== building) {
+    building = nextBuilding;
+    level = savedLevel(building);
   }
-  ui.render(view, floor, office.overflow(view, floor));
-  cards.render(view, floor);
-  renderFeed(feedList, view.feed, floor);
-  arcs.draw(view.handoffs, floor, (id) => cards.cardOf(id));
+  const levels = view.buildings.find((b) => b.name === building)?.levels ?? [];
+  if (level !== 'all' && !levels.some((l) => l.level === level)) level = 'all';
+  const kind = levels.find((l) => l.level === level)?.kind ?? 'lobby';
+  const slabs = levels.map((l) => {
+    const { label, alert } = levelSummary(view!, building, l.level);
+    return { level: l.level, theme: l.theme, label, ...(alert ? { alert } : {}) };
+  });
+  office.setBoard(boardContent(view, building));
+  office.setView(building, level, roomName(kind), slabs);
+  ui.render(view, building, level, office.overflow(view, building));
+  cards.render(view, building, level);
+  renderFeed(feedList, view.feed, building);
+  arcs.draw(view.handoffs, building, (id) => cards.cardOf(id));
 }
 
 function apply(next: OfficeView): void {
+  const first = !view;
   view = next;
-  floor = pickFloor(floor, next.floors.map((f) => f.name));
-  office.setFloor(floor);
+  if (first) level = savedLevel(pickBuilding(building, next.buildings.map((b) => b.name)));
   office.update(next);
-  render();
+  show();
 }
 
 function connect(): void {
@@ -104,5 +149,7 @@ const updatePhase = () => office.setPhase(phaseAt(pinnedHour ?? new Date().getHo
 updatePhase();
 setInterval(updatePhase, PHASE_CHECK_MS);
 
-office.setFloor(floor);
+// Views that came in while the models loaded were drawn without seats: once the
+// office has placed them (its own deferred updates run first), redraw the page.
+void office.ready.then(() => setTimeout(show));
 connect();

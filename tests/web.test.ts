@@ -2,16 +2,19 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import type { ActorView, FeedEntryView, HandoffView } from '../server/src/office/types.ts';
+import type { ActorView, FeedEntryView, HandoffView, LevelView, OfficeView } from '../server/src/office/types.ts';
 import { arcPath, newArcs } from '../web/src/arcs.ts';
+import { boardContent } from '../web/src/board.ts';
 import { cardModel, STATUS_TEXT } from '../web/src/cards.ts';
 import { feedItems } from '../web/src/feed.ts';
 import { hourFromQuery, phaseAt } from '../web/src/scene/daylight.ts';
 import { choosePoi, dwellMs } from '../web/src/scene/idleLife.ts';
-import { blockedCells, cellKey, DOOR, PING_PONG, PODS, POIS } from '../web/src/scene/layout.ts';
+import { levelSummary, levelTag, overviewTagText, pickLevel, roomName } from '../web/src/levels.ts';
+import { blockedCells, PLANS } from '../web/src/scene/floorPlans.ts';
+import { cellKey, DOOR, ELEVATOR } from '../web/src/scene/layout.ts';
 import { findPath } from '../web/src/scene/pathfinding.ts';
 import { TEXT } from '../web/src/text.ts';
-import { pickFloor, showTabs } from '../web/src/ui.ts';
+import { pickBuilding, showTabs } from '../web/src/ui.ts';
 
 const actor = (over: Partial<ActorView> = {}): ActorView => ({
   id: 's:main',
@@ -63,23 +66,23 @@ describe('card model', () => {
   });
 
   // office-staff-cards spec, Scenario: 工作樓產出
-  it('shows only "N 個檔案" on a masked floor', () => {
+  it('shows only "N 個檔案" on a masked building', () => {
     const m = cardModel(actor({ outputCount: 1 }));
     expect(m.tags).toEqual([]);
     expect(m.countText).toBe('1 個檔案');
   });
 });
 
-describe('floor choice and tabs', () => {
+describe('building choice and tabs', () => {
   // office-3d-scene spec, Example: 選擇要顯示的樓層
   it.each([
     [undefined, ['辦公室'], '辦公室', false],
     ['私人樓', ['工作樓', '私人樓'], '私人樓', true],
     ['私人樓', ['辦公室'], '辦公室', false],
     [undefined, ['工作樓', '私人樓'], '工作樓', true],
-  ] as const)('remembered %s, floors %j → shows %s, tabs %s', (saved, floors, shown, tabs) => {
-    expect(pickFloor(saved, [...floors])).toBe(shown);
-    expect(showTabs([...floors])).toBe(tabs);
+  ] as const)('remembered %s, buildings %j → shows %s, tabs %s', (saved, buildings, shown, tabs) => {
+    expect(pickBuilding(saved, [...buildings])).toBe(shown);
+    expect(showTabs([...buildings])).toBe(tabs);
   });
 
   it('finds every data-text and data-text-label key of index.html as a plain string in TEXT', () => {
@@ -89,9 +92,94 @@ describe('floor choice and tabs', () => {
     for (const key of keys) expect(typeof (TEXT as Record<string, unknown>)[key], key).toBe('string');
   });
 
-  it('never names a floor itself', () => {
+  it('never names a building itself', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '..', 'web', 'src', 'main.ts'), 'utf-8');
     expect(source).not.toMatch(/私人樓|工作樓/);
+  });
+});
+
+describe('floors in a building', () => {
+  const levels = (occupied: number[], all = [1, 2, 3, 4, 5, 6, 7]): LevelView[] =>
+    all.map((level) => ({ level, name: `${level}`, kind: level === 1 ? 'lobby' : level === 2 ? 'managers' : 'department', theme: level === 1 ? 'lobby' : level === 2 ? 'managers' : 'build', groups: occupied.includes(level) ? 1 : 0 }));
+
+  // office-building-floors spec, Example: 選擇要顯示的樓層
+  it.each([
+    [undefined, 'all'],
+    ['all', 'all'],
+    [6, 6],
+    [9, 'all'],
+  ] as const)('remembered %s, floors 1–7 → shows %s', (saved, shown) => {
+    expect(pickLevel(saved, levels([5]))).toBe(shown);
+  });
+
+  // office-building-floors spec, Requirement: 整棟視圖 (name plates show the status word, never tools, files or commands)
+  it.each([
+    [{ status: 'running', bubble: '執行指令：npm run build', tool: 'Bash' }, '執行中'],
+    [{ status: 'waiting', bubble: '等你核准', tool: undefined }, '等你'],
+    [{ status: 'dozing', bubble: '打瞌睡', tool: undefined }, '打瞌睡'],
+  ] as const)('shows %j as %s in the whole-building view', (over, text) => {
+    const shown = overviewTagText(actor({ ...over }));
+    expect(shown).toBe(text);
+    expect(shown).not.toMatch(/npm|Bash|build/);
+  });
+
+  it('labels a floor as 5F and the whole building as 整棟', () => {
+    expect(levelTag(5)).toBe('5F');
+    expect(levelTag('all')).toBe('整棟');
+  });
+
+  // office-building-floors spec, Example: 樓板標籤與邊框
+  it.each([
+    [[], '5F 工程組｜0 組｜工作中 0・等你 0', undefined],
+    [['running', 'waiting'], '5F 工程組｜2 組｜工作中 1・等你 1', 'waiting'],
+    [['stuck', 'waiting'], '5F 工程組｜2 組｜工作中 0・等你 1', 'stuck'],
+    [['thinking', 'done'], '5F 工程組｜2 組｜工作中 1・等你 0', undefined],
+  ] as const)('main characters %j → %s, edge %s', (statuses, label, alert) => {
+    const view: OfficeView = {
+      buildings: [{ name: '工作樓', masked: true, stats: { working: 0, outputs: 0, waiting: 0 }, levels: [{ level: 5, name: '工程組', kind: 'department', departmentId: 'build', theme: 'build', groups: statuses.length }] }],
+      groups: statuses.map((status, i) => ({
+        sessionId: `s${i}`,
+        building: '工作樓',
+        level: 5,
+        label: `g${i}`,
+        lastActivity: 0,
+        actors: [actor({ id: `s${i}:main`, status }), actor({ id: `s${i}:sub:t`, role: 'subagent', status: 'running' })],
+      })),
+      feed: [],
+      handoffs: [],
+      generatedAt: 0,
+    };
+    const summary = levelSummary(view, '工作樓', 5);
+    expect(summary.label).toBe(label);
+    expect(summary.alert).toBe(alert);
+  });
+
+  // office-3d-scene spec, Example: 房間名稱
+  it.each([
+    ['lobby', '總裁室'],
+    ['managers', '主管會議室'],
+    ['department', '組長室'],
+  ] as const)('names the room on a %s floor %s', (kind, name) => {
+    expect(roomName(kind)).toBe(name);
+  });
+
+  // office-building-floors spec, Requirement: 員工搭電梯換樓層
+  it.each(Object.values(PLANS))('puts the elevator on a free cell next to the door on $theme, reachable from every seat and point of interest', (plan) => {
+    const blocked = blockedCells(plan);
+    expect(blocked.has(cellKey(ELEVATOR))).toBe(false);
+    expect(Math.abs(ELEVATOR.x - DOOR.x) + Math.abs(ELEVATOR.z - DOOR.z)).toBe(1);
+    const targets = [...plan.pods.flatMap((p) => p.seats), ...plan.pois, DOOR];
+    for (const target of targets) {
+      const path = findPath(ELEVATOR, target, blocked);
+      expect(path[path.length - 1], cellKey(target)).toEqual({ x: target.x, z: target.z });
+      const back = findPath(target, ELEVATOR, blocked);
+      expect(back[back.length - 1]).toEqual({ x: ELEVATOR.x, z: ELEVATOR.z });
+    }
+  });
+
+  it('shows the floor buttons and a floor tag on sidebar rows: index.html has the levels panel', () => {
+    const html = fs.readFileSync(path.join(import.meta.dirname, '..', 'web', 'index.html'), 'utf-8');
+    expect(html).toContain('id="levels"');
   });
 });
 
@@ -109,9 +197,9 @@ describe('hand-off arcs', () => {
     expect(g.d).toBe(`M 200 500 Q 360 ${g.control.y} 520 500`);
   });
 
-  const h = (id: string, floor = '私人樓'): HandoffView => ({ id, at: 0, floor, from: 's:main', to: 's:sub:t1', label: 'x' });
+  const h = (id: string, building = '私人樓'): HandoffView => ({ id, at: 0, building, from: 's:main', to: 's:sub:t1', label: 'x' });
 
-  it('draws each hand-off once, only on its floor and only with both cards on screen', () => {
+  it('draws each hand-off once, only on its building and only with both cards on screen', () => {
     const drawn = new Set<string>();
     const boxes = (id: string) => (id === 's:main' ? a : id === 's:sub:t1' ? b : undefined);
     expect(newArcs([h('f1'), h('f2', '工作樓')], '私人樓', drawn, boxes).map((x) => x.id)).toEqual(['f1']);
@@ -121,17 +209,64 @@ describe('hand-off arcs', () => {
   });
 });
 
+describe('war-room board', () => {
+  const group = (label: string, level: number, status: ActorView['status'], lastActivity: number, building = '私人樓') => ({
+    sessionId: label,
+    building,
+    level,
+    label,
+    lastActivity,
+    actors: [actor({ id: `${label}:main`, status }), actor({ id: `${label}:sub:t`, role: 'subagent', status: 'stuck' })],
+  });
+  const view = (groups: OfficeView['groups'], feed: FeedEntryView[] = []): OfficeView => ({ buildings: [], groups, feed, handoffs: [], generatedAt: 0 });
+  const columns = (v: OfficeView) => boardContent(v, '私人樓').columns.map((c) => [c.title, c.items]);
+
+  // office-building-floors spec, Example: 看板內容
+  it('says （無） in every column of an empty building', () => {
+    expect(columns(view([]))).toEqual([
+      ['待你決議 0', ['（無）']],
+      ['卡住 0', ['（無）']],
+      ['最新動態 0', ['（無）']],
+    ]);
+  });
+
+  it('lists a waiting group and a stuck one by floor, counting main characters only, this building only', () => {
+    const v = view([group('A', 5, 'waiting', 2), group('B', 6, 'stuck', 1), group('C', 5, 'running', 3), group('D', 5, 'waiting', 9, '工作樓')]);
+    const [decide, stuck] = columns(v);
+    expect(decide).toEqual(['待你決議 1', ['5F A']]);
+    expect(stuck).toEqual(['卡住 1', ['6F B']]);
+  });
+
+  it('shows the newest 6 of 8 feed lines with their category', () => {
+    const kinds = ['done', 'handoff', 'return', 'waiting'] as const;
+    const feed: FeedEntryView[] = Array.from({ length: 8 }, (_, i) => ({ id: `f${i}`, at: i, building: '私人樓', kind: kinds[i % 4], text: `第 ${i} 則` }));
+    feed.push({ id: 'x', at: 99, building: '工作樓', kind: 'done', text: '別棟' });
+    const [, , latest] = columns(view([], feed));
+    expect(latest).toEqual(['最新動態 6', ['等你 第 7 則', '回報 第 6 則', '交辦 第 5 則', '完成 第 4 則', '等你 第 3 則', '回報 第 2 則']]);
+    expect(boardContent(view([], [{ id: 'd', at: 1, building: '私人樓', kind: 'done', text: '本週銷售週報 產出 1 個檔案' }]), '私人樓').columns[2].items).toEqual([
+      '完成 本週銷售週報 產出 1 個檔案',
+    ]);
+  });
+
+  it('keeps the most recent groups first and at most 6 per column', () => {
+    const groups = Array.from({ length: 8 }, (_, i) => group(`G${i}`, 3, 'waiting', i));
+    const [decide] = columns(view(groups));
+    expect(decide[0]).toBe('待你決議 8');
+    expect(decide[1]).toEqual(['3F G7', '3F G6', '3F G5', '3F G4', '3F G3', '3F G2']);
+  });
+});
+
 describe('feed items', () => {
-  const entry = (i: number, floor: string): FeedEntryView => ({
+  const entry = (i: number, building: string): FeedEntryView => ({
     id: `f${i}`,
     at: new Date(2026, 10, 3, 9, i % 60, 0).getTime(),
-    floor,
+    building,
     kind: 'done',
     text: `第 ${i} 則`,
   });
 
   // office-activity-feed spec, Scenario: 別的樓層的動態
-  it('keeps this floor only, in order, at most 30, with HH:MM', () => {
+  it('keeps this building only, in order, at most 30, with HH:MM', () => {
     const feed = [entry(40, '工作樓'), ...Array.from({ length: 35 }, (_, i) => entry(35 - i, '私人樓'))];
     const items = feedItems(feed, '私人樓');
     expect(items).toHaveLength(30);
@@ -142,16 +277,21 @@ describe('feed items', () => {
 });
 
 describe('idle life', () => {
-  const blocked = blockedCells();
+  // The managers' floor keeps the original pantry and lounge.
+  const plan = PLANS.managers;
+  const POIS = plan.pois;
+  const blocked = blockedCells(plan);
+  const pingPong = plan.props.find((p) => p.kind === 'pingPong')!;
 
   it('builds the ping-pong table on blocked cells', () => {
-    expect(blocked.has(cellKey(PING_PONG))).toBe(true);
-    expect(blocked.has(cellKey({ x: PING_PONG.x + 1, z: PING_PONG.z }))).toBe(true);
+    expect(blocked.has(cellKey(pingPong))).toBe(true);
+    expect(blocked.has(cellKey({ x: pingPong.x + 1, z: pingPong.z }))).toBe(true);
   });
 
-  it('can reach every point of interest from the door and every seat without crossing furniture', () => {
-    const starts = [DOOR, ...PODS.flatMap((p) => p.seats)];
-    for (const poi of POIS) {
+  it.each(Object.values(PLANS))('can reach every point of interest on $theme from the door and every seat without crossing furniture', (floor) => {
+    const blocked = blockedCells(floor);
+    const starts = [DOOR, ...floor.pods.flatMap((p) => p.seats)];
+    for (const poi of floor.pois) {
       expect(blocked.has(cellKey(poi)), poi.name).toBe(false);
       for (const start of starts) {
         const path = findPath(start, poi, blocked);
