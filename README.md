@@ -4,7 +4,7 @@
 
 > **English summary** — AI Office turns every Claude Code conversation on your machine into a small team in a 3D isometric office: names, job titles, model badges and status bubbles (in Traditional Chinese), staff cards with progress bars and output files, an activity feed, and hand-off arcs when sub-agents are sent out. It only reads Claude Code's local transcripts, serves on `127.0.0.1` only, and uploads nothing. Requires Node.js 24. `npm install && npm run build && npm start`, then open <http://127.0.0.1:5188/>; `npm run demo` shows a scripted demo with made-up data. Each conversation sits on the floor of the department its current skill belongs to (built-in: five speclink departments on 3F–7F, everyone else in the 1F lobby) and rides the elevator when it switches skills. The page opens on a cutaway of the whole building; pick a floor to see it in detail. Buildings (e.g. a masked "work" building) and departments are configured in `~/.ai-office/config.json` — see `config.example.json`. Tested on Windows only.
 
-![整棟視圖（示範模式）：每層一片樓板，5F 有人卡住所以亮紅框](docs/整棟視圖.png)
+![整棟視圖（示範模式）：每層一片樓板、各層主題色不同，5F 有人卡住所以亮紅框，左下是 1F 戰情看板卡片](docs/整棟視圖.png)
 
 - **只在本機**：伺服器只聽 `127.0.0.1`，不自動開瀏覽器，不寫 log 檔，不上傳任何東西。
 - **只讀不寫**：只讀 `~/.claude/projects` 底下的對話紀錄，不寫入任何檔案。專案資料夾只有兩個例外，而且只限**沒有遮罩**的棟：讀正在處理的 speclink／spectra 變更的 `tasks.md` 算進度；你點產出標籤時，讀那個對話今天寫過的檔案來預覽。
