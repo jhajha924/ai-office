@@ -8,6 +8,10 @@
   "roster": {
     "names": ["阿哲", "小安", "阿凱", "小芸", "阿翔", "小婷", "阿傑", "小涵"]
   },
+  "dispatch": {
+    "building": "私人樓",
+    "workRoot": "C:\\Projects\\personal\\"
+  },
   "timing": {
     "stuckRunningMs": 600000,
     "stuckThinkingMs": 480000,

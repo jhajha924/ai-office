@@ -6,8 +6,8 @@ import { skillTitle, subagentTitle } from './roster.ts';
 import { baseName, STATE_BUBBLES, subtaskStatus, toolStatus } from './statusText.ts';
 import type { ActorState, GroupState, OfficeStore } from './store.ts';
 import { startOfLocalDay } from './store.ts';
-import type { ActorStatus, ActorView, BuildingView, GroupView, ModelFamily, OfficeView, OutputRef } from './types.ts';
-import { levelForSkills, levelList } from './levels.ts';
+import type { ActorStatus, ActorView, BuildingView, DispatchPanelView, GroupView, ModelFamily, OfficeView, OutputRef } from './types.ts';
+import { LOBBY_LEVEL, levelForSkills, levelList, MANAGERS_LEVEL } from './levels.ts';
 
 /**
  * The processing station: store state → OfficeView. Building, title, Chinese
@@ -17,6 +17,9 @@ import { levelForSkills, levelList } from './levels.ts';
  */
 
 export const MAIN_TITLE = '主對話';
+/** Titles of the dispatch seats. */
+export const SEAT_TITLES = { president: '總裁', manager: '經理' } as const;
+export const SEAT_WAITING_BUBBLE = '等你確認路線';
 
 export function modelFamily(model: string | undefined): ModelFamily {
   const m = (model ?? '').toLowerCase();
@@ -90,7 +93,8 @@ function actorView(
     const skill = [...group.actors.values()].find((a) => a.role === 'skill');
     if (group.pendingAsks.size > 0 || group.hookWaiting) {
       status = 'waiting';
-      bubble = group.pendingAsks.size > 0 ? '等你回答' : STATE_BUBBLES.waiting;
+      // A manager waits for the route to be confirmed, not for a permission prompt.
+      bubble = group.pendingAsks.size > 0 ? '等你回答' : group.seat ? SEAT_WAITING_BUBBLE : STATE_BUBBLES.waiting;
       tool = undefined;
     } else if (skill && actor.status === 'running') {
       // While a skill employee is in, the work shows on its bubble instead.
@@ -104,7 +108,9 @@ function actorView(
 
   const title =
     actor.role === 'main'
-      ? MAIN_TITLE
+      ? group.seat
+        ? SEAT_TITLES[group.seat.kind]
+        : MAIN_TITLE
       : actor.role === 'subagent'
         ? subagentTitle(actor.subagentType, building, config)
         : skillTitle(actor.skill ?? '', building, config);
@@ -145,7 +151,10 @@ function actorView(
   };
 }
 
-export function buildView(store: OfficeStore, config: OfficeConfig, now: number): OfficeView {
+/** What the view shows when dispatch is not configured. */
+export const DISPATCH_OFF: DispatchPanelView = { status: 'off', recent: [] };
+
+export function buildView(store: OfficeStore, config: OfficeConfig, now: number, dispatch: DispatchPanelView = DISPATCH_OFF): OfficeView {
   const groups: GroupView[] = [];
   for (const group of store.groups.values()) {
     if (now - group.lastActivity >= config.timing.groupLeaveMs) continue;
@@ -155,7 +164,8 @@ export function buildView(store: OfficeStore, config: OfficeConfig, now: number)
     groups.push({
       sessionId: group.sessionId,
       building,
-      level: levelForSkills(group.skills, config),
+      level: group.seat ? (group.seat.kind === 'president' ? LOBBY_LEVEL : MANAGERS_LEVEL) : levelForSkills(group.skills, config),
+      ...(group.seat ? { seat: { ...group.seat } } : {}),
       label,
       actors,
       lastActivity: group.lastActivity,
@@ -199,5 +209,5 @@ export function buildView(store: OfficeStore, config: OfficeConfig, now: number)
   }
   for (const [building, files] of seen) buildingOf(building).stats.outputs = files.size;
 
-  return { buildings, groups, feed: buildFeed(store, config), handoffs: buildHandoffs(store, config, now), generatedAt: now };
+  return { buildings, groups, feed: buildFeed(store, config), handoffs: buildHandoffs(store, config, now), dispatch, generatedAt: now };
 }

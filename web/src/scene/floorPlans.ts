@@ -1,5 +1,5 @@
-import type { FloorTheme } from '../../../server/src/office/types.ts';
-import type { Cell, Furniture, Pod, Poi, Zone } from './layout.ts';
+import type { FloorTheme, Seat as GroupSeat } from '../../../server/src/office/types.ts';
+import type { Cell, Furniture, Pod, Poi, Seat, Zone } from './layout.ts';
 import { cellKey, GRID_H, GRID_W, POD_ORDER, PODS } from './layout.ts';
 
 /**
@@ -80,6 +80,10 @@ export interface FloorPlan {
   podOrder: number[];
   pois: Poi[];
   deskKit: DeskKit;
+  /** 1F: the president's chair. */
+  presidentSeat?: Seat;
+  /** 2F: the chair of manager office 1..6, in office order. */
+  managerSeats?: Seat[];
 }
 
 const HALF_PI = Math.PI / 2;
@@ -207,7 +211,8 @@ const LOBBY: FloorPlan = {
     { model: 'rugRectangle', x: 16, z: 1, w: 6, d: 4, walkable: true },
     { model: 'desk', x: 18, z: 2, w: 3, d: 1, h: 0.78 },
     { model: 'computerScreen', x: 19.2, z: 2.05, w: 0.6, d: 0.3, h: 0.42, y0: 0.78, rot: Math.PI, walkable: true },
-    { model: 'chairModernCushion', x: 19, z: 1, w: 1, d: 1, h: 0.95 },
+    // The president sits here (presidentSeat), so the chair is not in the way.
+    { model: 'chairModernCushion', x: 19, z: 1, w: 1, d: 1, h: 0.95, walkable: true },
     { model: 'chairCushion', x: 18, z: 3, w: 1, d: 1, rot: Math.PI, h: 0.8 },
     { model: 'chairCushion', x: 20, z: 3, w: 1, d: 1, rot: Math.PI, h: 0.8 },
     { model: 'bookcaseOpen', x: 23, z: 1, w: 1, d: 2, rot: -HALF_PI, h: 1.7 },
@@ -244,6 +249,7 @@ const LOBBY: FloorPlan = {
     { name: '總裁室', x: 17, z: 4, facing: 'east', pose: 'stand' },
   ],
   deskKit: 'laptop',
+  presidentSeat: { x: 19, z: 1, facing: 'south' },
 };
 
 // ------------------------------------------------------------------ 2F managers
@@ -252,18 +258,20 @@ const LOBBY: FloorPlan = {
 const OFFICE_X = [0, 4, 8];
 const OFFICE_Z = [0, 8];
 
-function privateOffice(x: number, z: number, n: number): { furniture: Furniture[]; prop: Prop } {
+function privateOffice(x: number, z: number, n: number): { furniture: Furniture[]; prop: Prop; seat: Seat } {
   const front = z === 0; // the back row opens to the south, the front row to the north
   const deskZ = front ? z + 2 : z + 3;
   const chairZ = front ? z + 1 : z + 4;
   const visitorZ = front ? z + 3 : z + 2;
   return {
     prop: { kind: 'glassOffice', x, z, w: 4, d: 6, door: front ? 'south' : 'north', text: `經理室 ${n}` },
+    // The manager's chair faces the desk; it is walkable because the manager sits on it.
+    seat: { x: x + 1, z: chairZ, facing: front ? 'south' : 'north' },
     furniture: [
       { model: 'rugRectangle', x: x + 0.5, z: z + 1, w: 3, d: 4, walkable: true },
       { model: 'desk', x: x + 1, z: deskZ, w: 2, d: 1, h: 0.75 },
       { model: 'computerScreen', x: x + 1.7, z: deskZ + (front ? 0.05 : 0.65), w: 0.6, d: 0.3, h: 0.42, y0: 0.75, rot: front ? Math.PI : 0, walkable: true },
-      { model: 'chairModernCushion', x: x + 1, z: chairZ, w: 1, d: 1, rot: front ? 0 : Math.PI, h: 0.95 },
+      { model: 'chairModernCushion', x: x + 1, z: chairZ, w: 1, d: 1, rot: front ? 0 : Math.PI, h: 0.95, walkable: true },
       { model: 'chairCushion', x: x + 2, z: visitorZ, w: 1, d: 1, rot: front ? Math.PI : 0, h: 0.8 },
       { model: 'bookcaseOpen', x: x + 3, z: front ? z : z + 4, w: 1, d: 2, rot: -HALF_PI, h: 1.5 },
       { model: 'plantSmall1', x, z: front ? z : z + 5, w: 1, d: 1, h: 0.6 },
@@ -285,6 +293,7 @@ const MANAGERS: FloorPlan = {
   podOrder: [],
   pois: [...PANTRY_POIS, ...LOUNGE_POIS],
   deskKit: 'screen',
+  managerSeats: OFFICES.map((o) => o.seat),
 };
 
 // ------------------------------------------------------------------ 3F‥7F departments
@@ -505,7 +514,18 @@ export function blockedCells(plan: FloorPlan): Set<string> {
 
 /** Every cell people must reach on this floor: seats, standing cells, points of interest. */
 export function targetsOf(plan: FloorPlan): Cell[] {
-  return [...plan.pods.flatMap((p) => [...p.seats, ...p.standing]), ...plan.pois];
+  return [
+    ...plan.pods.flatMap((p) => [...p.seats, ...p.standing]),
+    ...plan.pois,
+    ...(plan.presidentSeat ? [plan.presidentSeat] : []),
+    ...(plan.managerSeats ?? []),
+  ];
+}
+
+/** Where a dispatch seat is on this floor: the president's chair, or manager office n's chair. */
+export function fixedSeat(plan: FloorPlan, seat: GroupSeat): Seat | undefined {
+  if (seat.kind === 'president') return plan.presidentSeat;
+  return plan.managerSeats?.[seat.office - 1];
 }
 
 /** Is a cell on the grid? */

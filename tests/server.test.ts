@@ -45,6 +45,7 @@ const emptyView = (groups = 0): OfficeView => ({
   groups: Array.from({ length: groups }, (_, i) => ({ sessionId: `s${i}`, building: '私人樓', level: 1, label: `g${i}`, actors: [], lastActivity: 0 })),
   feed: [],
   handoffs: [],
+  dispatch: { status: 'off', recent: [] },
   generatedAt: Date.now(),
 });
 

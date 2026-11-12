@@ -22,7 +22,10 @@ export type OfficeEventKind =
   /** The session used a skill (Skill tool or a slash command); `skill` names it. */
   | 'skill.use';
 
-export type OfficeEventSource = 'observe' | 'hook' | 'demo';
+export type OfficeEventSource = 'observe' | 'hook' | 'demo' | 'dispatch';
+
+/** A fixed seat instead of a pod: the president's desk on 1F, or manager office 1..6 on 2F. */
+export type Seat = { kind: 'president' } | { kind: 'manager'; office: number };
 
 export interface OfficeEvent {
   kind: OfficeEventKind;
@@ -42,6 +45,8 @@ export interface OfficeEvent {
   skill?: string;
   /** progress only: tasks done / total of the change being worked on; absent = cannot tell. */
   progress?: Progress;
+  /** Dispatch only: where the president or a manager sits; fixes the group's floor. */
+  seat?: Seat;
   /** Epoch milliseconds. */
   at: number;
 }
@@ -99,6 +104,8 @@ export interface GroupView {
   building: string;
   /** Floor in its building: the department of its current skill, or 1 (the lobby). */
   level: number;
+  /** The president's desk or a manager's office; absent = an ordinary pod. */
+  seat?: Seat;
   label: string;
   actors: ActorView[];
   lastActivity: number;
@@ -154,6 +161,50 @@ export interface HandoffView {
   label: string;
 }
 
+/** Dispatch (交辦) as the browser sees it: never a full path. */
+export interface DispatchPanelView {
+  status: 'off' | 'ready' | 'missing-claude' | 'missing-speclink';
+  /** The building dispatch works on. */
+  building?: string;
+  /** The dispatch not finished yet (president / manager / confirm / failed). */
+  active?: DispatchView;
+  /** The latest 5 finished dispatches, newest first. */
+  recent: DispatchView[];
+}
+
+export interface DispatchView {
+  id: string;
+  text: string;
+  status: 'president' | 'manager' | 'confirm' | 'failed' | 'done';
+  /** manager: which project's manager is at work (1-based) of how many. */
+  step?: { index: number; total: number };
+  /** failed: the reason, in Chinese. */
+  error?: string;
+  projects: ProjectView[];
+  /** Open decisions only. */
+  decisions: DecisionView[];
+  usage: { turns: number; durationMs: number };
+}
+
+export interface ProjectView {
+  id: string;
+  title: string;
+  kind: 'code' | 'research';
+  /** The folder's last segment; 「產出資料夾」 for research. */
+  folder: string;
+  route: { id: string; level: number; name: string; doneWhen: string; required: boolean }[];
+  notes: string[];
+  risks: string[];
+  status: 'planning' | 'confirm' | 'queued' | 'cancelled';
+}
+
+export interface DecisionView {
+  id: string;
+  kind: 'confirm' | 'retry';
+  project?: string;
+  summary: string;
+}
+
 export interface OfficeView {
   buildings: BuildingView[];
   groups: GroupView[];
@@ -161,6 +212,7 @@ export interface OfficeView {
   feed: FeedEntryView[];
   /** Hand-offs and returns of the last 15 seconds. */
   handoffs: HandoffView[];
+  dispatch: DispatchPanelView;
   generatedAt: number;
 }
 

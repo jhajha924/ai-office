@@ -285,3 +285,51 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .overview-board .board-col-0 b { border-color: #f59e0b; }
 .overview-board .board-col-1 b { border-color: #ef4444; }
 .overview-board .board-col-2 b { border-color: #38bdf8; }
+
+/* ── 交辦 (dispatch) ─────────────────────────────────────── */
+.dispatch-button {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid #f59e0b; background: #f59e0b; color: #2b2a27; font: inherit; font-weight: 700;
+  padding: 4px 14px; border-radius: 999px; cursor: pointer;
+}
+.dispatch-button[hidden] { display: none; }
+.dispatch-button:disabled { background: transparent; color: #8d887d; border-color: #55524b; cursor: not-allowed; }
+.dispatch-drawer {
+  position: fixed; top: 48px; right: 0; bottom: 0; z-index: 30; width: min(420px, 100vw);
+  overflow-y: auto; padding: 12px 16px 24px; box-sizing: border-box;
+  background: var(--panel); border-left: 1px solid var(--line); box-shadow: -6px 0 18px rgba(0, 0, 0, 0.12);
+}
+.dispatch-drawer[hidden] { display: none; }
+.dispatch-head { display: flex; align-items: center; justify-content: space-between; }
+.dispatch-head h2 { margin: 0; font-size: 18px; }
+.dispatch-close { border: 0; background: transparent; font-size: 22px; cursor: pointer; color: var(--muted); }
+.dispatch-message { color: var(--stuck); font-size: 14px; }
+.dispatch-form { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.dispatch-form textarea { font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; resize: vertical; }
+.dispatch-building { font-size: 13px; color: var(--muted); }
+.dispatch-send, .dispatch-action {
+  font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line); background: #fff; cursor: pointer;
+}
+.dispatch-send, .dispatch-action.primary { background: #2b2a27; color: #fff; border-color: #2b2a27; align-self: flex-start; }
+.dispatch-busy { color: var(--thinking); font-weight: 700; }
+.dispatch-failed { border: 1px solid var(--stuck); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+.dispatch-failed p { margin: 0 0 8px; color: var(--stuck); font-weight: 700; }
+.dispatch-failed .dispatch-action { margin-right: 8px; }
+.confirm-card { border: 1px solid var(--line); border-left: 4px solid var(--waiting); border-radius: 8px; padding: 8px 10px; margin: 10px 0; background: #fff; }
+.confirm-card h3 { margin: 0; font-size: 16px; }
+.confirm-meta { font-size: 12px; color: var(--muted); margin: 2px 0 6px; }
+.route-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: #e8f0fe; font-size: 13px; }
+.chip.required { background: #fde7d8; font-weight: 700; }
+.chip.removed { background: #eee; color: #aaa; text-decoration: line-through; }
+.chip-x { border: 0; background: transparent; cursor: pointer; padding: 0 2px; color: var(--muted); font-size: 14px; }
+.done-when { margin: 6px 0; padding-left: 18px; font-size: 13px; }
+.confirm-note { font-size: 12px; color: var(--waiting); margin: 2px 0; }
+.confirm-risks { font-size: 12px; color: var(--muted); margin: 2px 0; }
+.confirm-actions { display: flex; gap: 8px; margin-top: 6px; }
+.dispatch-drawer h3 { font-size: 14px; }
+.dispatch-recent { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+.dispatch-recent li { border-top: 1px solid var(--line); padding: 6px 0; }
+.recent-text { font-weight: 700; }
+.dispatch-hint { margin: 0 0 8px; padding: 6px 10px; border-radius: 6px; background: #fff7ed; color: #9a3412; font-size: 13px; line-height: 1.5; }
+.recent-usage { color: var(--muted); font-size: 12px; }

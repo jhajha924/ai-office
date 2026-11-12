@@ -14,7 +14,8 @@ export function normalizeBuildingPath(raw: string): string {
   return raw.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
-function isWithin(key: string, prefixKey: string): boolean {
+/** True when a normalized path is the prefix folder itself or inside it (folder boundary). */
+export function isWithin(key: string, prefixKey: string): boolean {
   return key === prefixKey || key.startsWith(`${prefixKey}/`);
 }
 

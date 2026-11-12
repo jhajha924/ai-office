@@ -2,6 +2,14 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { DEMO_CONFIG, DemoSource } from './demo/demoSource.ts';
+import type { LookupEnv, VersionCheck } from './dispatch/cli.ts';
+import { checkAvailability } from './dispatch/cli.ts';
+import { DEMO_DISPATCH, DemoRunner } from './dispatch/demoRunner.ts';
+import { DispatchEngine, realFs } from './dispatch/engine.ts';
+import { defaultProjectsDir, fileStorage } from './dispatch/persist.ts';
+import { ClaudeRunner } from './dispatch/runner.ts';
+import type { AgentRunner } from './dispatch/types.ts';
+import { panelView } from './dispatch/view.ts';
 import type { OfficeServer } from './http/server.ts';
 import { createOfficeServer } from './http/server.ts';
 import type { ConfigSource } from './office/config.ts';
@@ -26,6 +34,12 @@ export interface AppOptions {
   assetsDir?: string;
   /** Where start-up warnings go (an unknown observe source); the console by default. */
   warn?: (message: string) => void;
+  /** Where dispatch records live; ~/.ai-office/projects by default. */
+  dispatchDir?: string;
+  /** Tests: the PATH lookup, the --version check and the runner used for dispatch. */
+  lookup?: LookupEnv;
+  versionCheck?: VersionCheck;
+  runner?: AgentRunner;
 }
 
 export interface App {
@@ -34,6 +48,8 @@ export interface App {
   /** The observe sources from observe.sources; none in demo mode. */
   sources: ObserveSource[];
   demo?: DemoSource;
+  /** Present once start() ran and dispatch is configured (or in demo mode). */
+  dispatch?: DispatchEngine;
   start(): Promise<number>;
   stop(): Promise<void>;
 }
@@ -70,9 +86,73 @@ export function createApp(options: AppOptions): App {
       );
   const demo = options.demo ? new DemoSource(store, now) : undefined;
 
+  let dispatch: DispatchEngine | undefined;
+  const warn = options.warn ?? ((message: string) => console.warn(message));
+
+  /** Manager offices taken by a manager still in the office. */
+  const occupiedOffices = (): Set<number> => {
+    const taken = new Set<number>();
+    const leaveMs = config.get().timing.groupLeaveMs;
+    for (const group of store.groups.values()) {
+      if (group.seat?.kind === 'manager' && now() - group.lastActivity < leaveMs) taken.add(group.seat.office);
+    }
+    return taken;
+  };
+
+  async function startDispatch(): Promise<void> {
+    if (options.demo) {
+      dispatch = new DispatchEngine({
+        settings: DEMO_DISPATCH,
+        status: 'ready',
+        departments: () => config.get().departments,
+        runner: options.runner ?? new DemoRunner(),
+        projectsDir: DEMO_DISPATCH.workRoot,
+        emit: (event) => store.apply(event),
+        setLabel: (sessionId, label) => store.setLabel(sessionId, label),
+        occupiedOffices,
+        now,
+        // The demo's folders are made up: they "exist", and nothing is created.
+        isDir: () => true,
+      });
+      return;
+    }
+    const settings = config.get().dispatch;
+    if (!settings) return;
+    const availability = await checkAvailability(settings, options.lookup, options.versionCheck);
+    const projectsDir = options.dispatchDir ?? defaultProjectsDir();
+    dispatch = new DispatchEngine({
+      settings,
+      status: availability.status,
+      departments: () => config.get().departments,
+      runner: options.runner ?? new ClaudeRunner({ file: availability.claude ?? 'claude' }),
+      projectsDir,
+      storage: fileStorage(projectsDir, warn),
+      emit: (event) => store.apply(event),
+      setLabel: (sessionId, label) => store.setLabel(sessionId, label),
+      occupiedOffices,
+      now,
+      isDir: realFs.isDir,
+      makeDir: realFs.makeDir,
+    });
+    if (availability.status !== 'ready') {
+      warn(`[AI 辦公室] 派工已停用：${availability.status === 'missing-claude' ? '找不到 claude' : '找不到 speclink'}`);
+    }
+  }
+
+  const dispatchPanel = () =>
+    dispatch
+      ? panelView(
+          { status: dispatch.status, building: dispatch.settings.building, dispatches: dispatch.dispatches, active: () => dispatch!.active() },
+          config.get().departments,
+        )
+      : undefined;
+
   const server = createOfficeServer({
     port: options.port,
-    getView: () => buildView(store, config.get(), now()),
+    getView: () => buildView(store, config.get(), now(), dispatchPanel()),
+    onDispatch: (body) =>
+      dispatch ? dispatch.submit(body && typeof body === 'object' ? (body as Record<string, unknown>).text : undefined) : { ok: false, status: 404, message: '找不到' },
+    onDecision: (id, body) => (dispatch ? dispatch.answer(id, body) : { ok: false, status: 404, message: '找不到' }),
     subscribe: (listener) => store.onChange(listener),
     // Demo mode previews come from the script's own text: no file is read.
     getOutput: (token) => previewOutput(store, config.get(), token, demo ? (p) => Promise.resolve(demo.previewText(p)) : undefined),
@@ -89,7 +169,11 @@ export function createApp(options: AppOptions): App {
     server,
     sources,
     demo,
+    get dispatch() {
+      return dispatch;
+    },
     async start() {
+      await startDispatch();
       const port = await server.listen();
       for (const source of sources) source.start();
       demo?.start();

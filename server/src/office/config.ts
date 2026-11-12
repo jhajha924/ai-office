@@ -76,6 +76,19 @@ export const DEPARTMENT_THEMES: readonly DepartmentTheme[] = ['analysis', 'spec'
 export const DEPARTMENT_FLOOR_MIN = 3;
 export const DEPARTMENT_FLOOR_MAX = 99;
 
+/** Where dispatch (交辦) may start work; absent = dispatch is off. */
+export interface DispatchSettings {
+  /** The one building dispatch works on: a configured, unmasked building. */
+  building: string;
+  /** Code projects must live in a folder under this root. */
+  workRoot: string;
+  models: { president: string; manager: string };
+  /** Explicit claude executable; otherwise it is looked up on PATH. */
+  claudePath?: string;
+}
+
+export const DEFAULT_DISPATCH_MODELS: DispatchSettings['models'] = { president: 'opus', manager: 'sonnet' };
+
 export interface OfficeConfig {
   buildings: { rules: BuildingRule[]; default: BuildingTarget };
   roster: Roster;
@@ -85,6 +98,7 @@ export interface OfficeConfig {
   timing: Timing;
   observe: ObserveSettings;
   departments: Department[];
+  dispatch?: DispatchSettings;
   port?: number;
 }
 
@@ -308,6 +322,27 @@ function parseDepartments(value: unknown): Department[] {
   });
 }
 
+function parseDispatch(value: unknown, buildings: OfficeConfig['buildings']): DispatchSettings {
+  if (!isPlainObject(value)) throw new ShapeError('dispatch');
+  const building = nonEmptyString(value.building, 'dispatch.building');
+  // Only a building the config actually has, and never a masked one.
+  const target = [...buildings.rules, buildings.default].find((b) => b.building === building);
+  if (!target || target.mask) throw new ShapeError('dispatch.building');
+  const workRoot = nonEmptyString(value.workRoot, 'dispatch.workRoot');
+  let models = DEFAULT_DISPATCH_MODELS;
+  if (value.models !== undefined) {
+    if (!isPlainObject(value.models)) throw new ShapeError('dispatch.models');
+    const pick = (key: 'president' | 'manager'): string =>
+      value.models === undefined || (value.models as Record<string, unknown>)[key] === undefined
+        ? DEFAULT_DISPATCH_MODELS[key]
+        : nonEmptyString((value.models as Record<string, unknown>)[key], `dispatch.models.${key}`);
+    models = { president: pick('president'), manager: pick('manager') };
+  }
+  const out: DispatchSettings = { building, workRoot, models };
+  if (value.claudePath !== undefined) out.claudePath = nonEmptyString(value.claudePath, 'dispatch.claudePath');
+  return out;
+}
+
 /** Validate a parsed config.json. Throws ShapeError naming the first bad field. */
 export function parseConfig(raw: unknown): OfficeConfig {
   if (!isPlainObject(raw)) throw new ShapeError('(root)');
@@ -327,6 +362,7 @@ export function parseConfig(raw: unknown): OfficeConfig {
     observe: parseObserve(raw.observe),
     departments: parseDepartments(raw.departments),
   };
+  if (raw.dispatch !== undefined) config.dispatch = parseDispatch(raw.dispatch, config.buildings);
   if (raw.port !== undefined) {
     const port = positiveInt(raw.port, 'port');
     if (port > 65535) throw new ShapeError('port');

@@ -147,6 +147,7 @@ describe('floors in a building', () => {
       })),
       feed: [],
       handoffs: [],
+      dispatch: { status: 'off', recent: [] },
       generatedAt: 0,
     };
     const summary = levelSummary(view, '工作樓', 5);
@@ -218,7 +219,7 @@ describe('war-room board', () => {
     lastActivity,
     actors: [actor({ id: `${label}:main`, status }), actor({ id: `${label}:sub:t`, role: 'subagent', status: 'stuck' })],
   });
-  const view = (groups: OfficeView['groups'], feed: FeedEntryView[] = []): OfficeView => ({ buildings: [], groups, feed, handoffs: [], generatedAt: 0 });
+  const view = (groups: OfficeView['groups'], feed: FeedEntryView[] = []): OfficeView => ({ buildings: [], groups, feed, handoffs: [], dispatch: { status: 'off', recent: [] }, generatedAt: 0 });
   const columns = (v: OfficeView) => boardContent(v, '私人樓').columns.map((c) => [c.title, c.items]);
 
   // office-building-floors spec, Example: 看板內容

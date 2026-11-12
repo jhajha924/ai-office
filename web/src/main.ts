@@ -4,6 +4,7 @@ import type { OfficeView } from '../../server/src/office/types.ts';
 import { ArcLayer } from './arcs.ts';
 import { boardContent } from './board.ts';
 import { CardStrip, openPreview } from './cards.ts';
+import { DispatchPanel, viewAfterDispatch } from './dispatch.ts';
 import { renderFeed } from './feed.ts';
 import type { LevelChoice } from './levels.ts';
 import { levelSummary, pickLevel, roomName } from './levels.ts';
@@ -34,6 +35,20 @@ let view: OfficeView | undefined;
 /** The remembered building until the first view says which buildings exist. */
 let building = read(BUILDING_KEY) ?? '';
 let level: LevelChoice = 'all';
+
+const dispatchPanel = new DispatchPanel(
+  document.getElementById('dispatch-button') as HTMLButtonElement,
+  document.getElementById('dispatch-drawer')!,
+  (accepted, dispatchBuilding) => {
+    const next = viewAfterDispatch({ building, level }, dispatchBuilding, accepted);
+    if (next.building === building) return;
+    building = next.building;
+    level = next.level;
+    save(BUILDING_KEY, building);
+    save(LEVEL_KEY(building), String(level));
+    show();
+  },
+);
 
 const cards = new CardStrip(document.getElementById('cards')!, {
   onFocus: (sessionId) => focus(sessionId),
@@ -70,7 +85,7 @@ office.onPickLevel = chooseLevel;
 /** Glide the camera to a group, on whatever floor it is. */
 function focus(sessionId: string): void {
   const group = view?.groups.find((g) => g.sessionId === sessionId);
-  if (group) office.focusGroup(building, group.level, sessionId);
+  if (group) office.focusGroup(building, group.level, sessionId, group.seat);
 }
 
 function read(key: string): string | undefined {
@@ -118,6 +133,7 @@ function show(): void {
   cards.render(view, building, level);
   renderFeed(feedList, view.feed, building);
   arcs.draw(view.handoffs, building, (id) => cards.cardOf(id));
+  dispatchPanel.update(view.dispatch);
 }
 
 function apply(next: OfficeView): void {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { roomName } from '../web/src/levels.ts';
-import { blockedCells, isBlocking, onGrid, PLANS, targetsOf } from '../web/src/scene/floorPlans.ts';
+import { blockedCells, fixedSeat, isBlocking, onGrid, PLANS, targetsOf } from '../web/src/scene/floorPlans.ts';
 import { cellKey, DOOR, ELEVATOR } from '../web/src/scene/layout.ts';
 import { findPath } from '../web/src/scene/pathfinding.ts';
 
@@ -32,6 +32,30 @@ describe('floor plans', () => {
   it('gives the managers six glass offices, 經理室 1 to 6', () => {
     const offices = PLANS.managers.props.filter((p) => p.kind === 'glassOffice');
     expect(offices.map((o) => o.text)).toEqual(['經理室 1', '經理室 2', '經理室 3', '經理室 4', '經理室 5', '經理室 6']);
+  });
+
+  // office-dispatch spec「總裁與經理坐在自己的位置」: the chairs are on the walkable, reachable targets above.
+  it('gives the president a chair on 1F and each of the six managers one on 2F', () => {
+    const president = PLANS.lobby.presidentSeat!;
+    expect(president).toEqual({ x: 19, z: 1, facing: 'south' });
+    expect(targetsOf(PLANS.lobby)).toContainEqual(president);
+    const seats = PLANS.managers.managerSeats!;
+    expect(seats).toHaveLength(6);
+    expect(new Set(seats.map(cellKey)).size).toBe(6);
+    for (const seat of seats) expect(targetsOf(PLANS.managers)).toContainEqual(seat);
+    // Each chair is inside its own glass office.
+    const offices = PLANS.managers.props.filter((p) => p.kind === 'glassOffice');
+    seats.forEach((s, i) => {
+      const o = offices[i];
+      expect(s.x >= o.x && s.x < o.x + o.w && s.z >= o.z && s.z < o.z + o.d, `經理室 ${i + 1}`).toBe(true);
+    });
+  });
+
+  it('finds the chair of a dispatch seat (fixedSeat)', () => {
+    expect(fixedSeat(PLANS.lobby, { kind: 'president' })).toEqual(PLANS.lobby.presidentSeat);
+    expect(fixedSeat(PLANS.managers, { kind: 'manager', office: 3 })).toEqual(PLANS.managers.managerSeats![2]);
+    expect(fixedSeat(PLANS.managers, { kind: 'manager', office: 7 })).toBeUndefined();
+    expect(fixedSeat(PLANS.build, { kind: 'president' })).toBeUndefined();
   });
 
   it.each(plans)('$theme keeps the door, the elevator, every seat and point of interest walkable and connected', (plan) => {

@@ -1,5 +1,5 @@
 import type { SessionHome } from './floorRouting.ts';
-import type { FeedKind, OfficeEvent, Progress } from './types.ts';
+import type { FeedKind, OfficeEvent, Progress, Seat } from './types.ts';
 import { mainActorId, skillActorId } from './types.ts';
 
 /**
@@ -45,6 +45,8 @@ export interface GroupState {
   progress?: Progress;
   /** Skills the session used, oldest first, each once, at most SKILLS_KEPT. */
   skills: string[];
+  /** Dispatch only: the president's or a manager's seat. */
+  seat?: Seat;
 }
 
 /**
@@ -179,6 +181,7 @@ export class OfficeStore {
     const group = this.ensureGroup(event.sessionId, event.cwd, event.at);
     const wasWaiting = isWaiting(group);
     if (event.cwd) group.cwd = event.cwd;
+    if (event.seat) group.seat = event.seat;
     if (event.at > group.lastActivity) group.lastActivity = event.at;
     if (event.source !== 'hook') group.hookWaiting = false;
 

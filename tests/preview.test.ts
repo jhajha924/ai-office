@@ -56,7 +56,7 @@ describe('output preview', () => {
     store.setHome('w', { cwd: work });
     server = createOfficeServer({
       port: 0,
-      getView: () => ({ buildings: [], groups: [], feed: [], handoffs: [], generatedAt: 0 }),
+      getView: () => ({ buildings: [], groups: [], feed: [], handoffs: [], dispatch: { status: 'off', recent: [] }, generatedAt: 0 }),
       subscribe: () => () => {},
       onHook: () => {},
       getOutput: (token) => previewOutput(store, config(), token),

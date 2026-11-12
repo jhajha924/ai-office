@@ -10,6 +10,7 @@
     <header class="top">
       <div class="brand" data-text="brand">AI 辦公室</div>
       <nav id="tabs" class="tabs" data-text-label="buildingsLabel"></nav>
+      <button id="dispatch-button" class="dispatch-button" type="button" hidden></button>
       <div id="stats" class="stats" aria-live="polite"></div>
     </header>
     <main class="layout">
@@ -31,6 +32,7 @@
         </section>
       </aside>
     </main>
+    <aside id="dispatch-drawer" class="dispatch-drawer" hidden></aside>
     <footer id="cards" class="cards" data-text-label="cardsLabel" hidden></footer>
     <svg id="arcs" class="arcs" aria-hidden="true"></svg>
     <script type="module" src="/src/main.ts"></script>

@@ -2,12 +2,12 @@
 
 把你電腦上所有 Claude Code 對話畫成一棟 **3D 等角辦公大樓**：一個對話一個小組，員工帶名字、職稱、模型標記與中文狀態泡泡。小組依目前使用的技能坐到對應的部門樓層（例如用 `/speclink-apply` 就在 5F 工程組），換技能時搭電梯換樓層。打開時先看到整棟的剖面，每層有誰、在做什麼、哪一層需要你一眼就看得到，想看細節再切進單一樓層。底部有員工卡片（進度條、產出檔），側欄有動態牆，派出子代理時卡片之間會畫交接弧線；沒事做的員工會晃去茶水間，久了打瞌睡，光線跟著白天黑夜變。
 
-> **English summary** — AI Office turns every Claude Code conversation on your machine into a small team in a 3D isometric office: names, job titles, model badges and status bubbles (in Traditional Chinese), staff cards with progress bars and output files, an activity feed, and hand-off arcs when sub-agents are sent out. It only reads Claude Code's local transcripts, serves on `127.0.0.1` only, and uploads nothing. Requires Node.js 24. `npm install && npm run build && npm start`, then open <http://127.0.0.1:5188/>; `npm run demo` shows a scripted demo with made-up data. Each conversation sits on the floor of the department its current skill belongs to (built-in: five speclink departments on 3F–7F, everyone else in the 1F lobby) and rides the elevator when it switches skills. The page opens on a cutaway of the whole building; pick a floor to see it in detail. Buildings (e.g. a masked "work" building) and departments are configured in `~/.ai-office/config.json` — see `config.example.json`. Tested on Windows only.
+> **English summary** — AI Office turns every Claude Code conversation on your machine into a small team in a 3D isometric office: names, job titles, model badges and status bubbles (in Traditional Chinese), staff cards with progress bars and output files, an activity feed, and hand-off arcs when sub-agents are sent out. It only reads Claude Code's local transcripts, serves on `127.0.0.1` only, and uploads nothing. Requires Node.js 24. `npm install && npm run build && npm start`, then open <http://127.0.0.1:5188/>; `npm run demo` shows a scripted demo with made-up data. Each conversation sits on the floor of the department its current skill belongs to (built-in: five speclink departments on 3F–7F, everyone else in the 1F lobby) and rides the elevator when it switches skills. The page opens on a cutaway of the whole building; pick a floor to see it in detail. Buildings (e.g. a masked "work" building) and departments are configured in `~/.ai-office/config.json` — see `config.example.json`. Optionally, a `dispatch` block lets you hand a request to an AI president and managers from the page (needs the `claude` and `speclink` CLIs; read-only tools only; for now it plans the route and stops at your approval). Tested on Windows only.
 
 ![整棟視圖（示範模式）：每層一片樓板、各層主題色不同，5F 有人卡住所以亮紅框，左下是 1F 戰情看板卡片](docs/整棟視圖.png)
 
 - **只在本機**：伺服器只聽 `127.0.0.1`，不自動開瀏覽器，不寫 log 檔，不上傳任何東西。
-- **只讀不寫**：只讀 `~/.claude/projects` 底下的對話紀錄，不寫入任何檔案。專案資料夾只有兩個例外，而且只限**沒有遮罩**的棟：讀正在處理的 speclink／spectra 變更的 `tasks.md` 算進度；你點產出標籤時，讀那個對話今天寫過的檔案來預覽。
+- **只讀不寫**：只讀 `~/.claude/projects` 底下的對話紀錄，不寫入任何檔案（唯一例外是你自己打開的「交辦」功能，見下方「交辦（派工，選用）」）。專案資料夾只有兩個例外，而且只限**沒有遮罩**的棟：讀正在處理的 speclink／spectra 變更的 `tasks.md` 算進度；你點產出標籤時，讀那個對話今天寫過的檔案來預覽。
 - **遮罩的棟**：設定成遮罩的棟（例如公司專案），泡泡只顯示動作種類（「讀取檔案」「執行指令」），檔名、指令、子任務描述在伺服器端就去掉，不會送到瀏覽器；也不讀那些專案的任何檔案。
 
 ## 需求
@@ -28,7 +28,7 @@ npm start         # 看你真正的 Claude Code 對話
 | 指令 | 用途 |
 |---|---|
 | `npm start` | 監看 `~/.claude/projects` 的對話紀錄 |
-| `npm run demo` | 示範模式：六個虛構的小組照劇本動（含工作樓與私人樓、1F／5F／6F／7F、搭電梯、閒置、打瞌睡、進度、產出預覽），**完全不讀任何檔案**，也不看你的設定檔 |
+| `npm run demo` | 示範模式：六個虛構的小組照劇本動（含工作樓與私人樓、1F／5F／6F／7F、搭電梯、閒置、打瞌睡、進度、產出預覽），「交辦」按鈕也能試用（總裁、經理照固定規則回答），**完全不讀任何檔案也不呼叫 claude**，也不看你的設定檔 |
 | `npm run build` | 建置前端 |
 | `npm test` | 自動測試（vitest） |
 | `npm run typecheck` | 型別檢查 |
@@ -139,7 +139,7 @@ AI_OFFICE_PORT=5190 npm start             # macOS／Linux／Git Bash
 
 位置：家目錄的 `.ai-office/config.json`（Windows 是 `%USERPROFILE%\.ai-office\config.json`）。**不建立也可以**。程式只讀這個檔、從不寫入；存檔後幾秒內就套用，不必重啟（`observe` 例外，要重啟）。格式寫錯時主控台印一行警告，整份退回內建預設。
 
-最快的做法：把程式庫裡的 [`config.example.json`](config.example.json) 複製過去再改。它示範兩棟：`C:\Projects\work\` 底下的對話進「工作樓」並遮罩，其他都進「私人樓」。
+最快的做法：把程式庫裡的 [`config.example.json`](config.example.json) 複製過去再改。它示範兩棟：`C:\Projects\work\` 底下的對話進「工作樓」並遮罩，其他都進「私人樓」。也示範把「私人樓」設成交辦的派工棟。
 
 | 鍵 | 意思 | 內建預設 |
 |---|---|---|
@@ -152,11 +152,32 @@ AI_OFFICE_PORT=5190 npm start             # macOS／Linux／Git Bash
 | `groupLabelMaxChars` | 小組名稱最多幾個字 | 15 |
 | `timing` | 卡住、閒置、打瞌睡、離開的時間（毫秒） | 見 `config.example.json` |
 | `observe.sources` | 要觀察哪些 AI 工具的對話（見下一節） | `["claude-code"]` |
+| `dispatch` | 打開「交辦」功能：`{ "building": 派工的棟, "workRoot": 程式專案所在的根資料夾, "models": { "president": …, "manager": … }（選填）, "claudePath": claude 執行檔（選填） }`；棟必須是設定裡有的、沒有遮罩的棟（見下一節） | 沒有（不派工） |
 | `port` | 連接埠 | 5188 |
 
 - 舊版設定檔的 `floors`（規則用 `floor` 欄位）與 `floorOverrides` 照樣可讀；新鍵 `buildings`、`buildingOverrides` 存在時以新鍵為準。
 - 沒有用 speclink 的話，可以把 `departments` 改成你自己常用的技能，或設成 `[]`。
 - 示範模式（`npm run demo`）永遠使用內建的兩棟示範設定與內建部門，不受這個檔影響；想看自己的設定效果請用 `npm start`。
+
+## 交辦（派工，選用）
+
+在設定檔加上 `dispatch` 區塊並重開 `npm start`，頂列棟分頁右邊會出現「交辦」按鈕。按下去輸入一句話，就會：
+
+1. **總裁**（1F 總裁室）把它拆成 1～3 個專案：程式專案要在 `workRoot` 底下已經存在的資料夾；研究、整理類的專案另給產出資料夾。
+2. **經理**（2F 經理室，一個專案一位）排出要經過哪些部門，以及每一站的完成標準。
+3. 路線排好後經理變成「等你」，1F 戰情看板的「待你決議」也會列出來。你在交辦面板的確認卡上可以刪站（改程式的專案一定要經過測試品管，那一站刪不掉），按「開工」或「取消」。
+4. 開工後專案顯示「排隊中（等派工引擎）」。**目前到這裡為止**：各部門實際動手做事是下一版的功能。
+
+```json
+"dispatch": { "building": "私人樓", "workRoot": "C:\\Projects\\personal\\" }
+```
+
+- **需要什麼**：本機要裝好 `claude`（Claude Code，用你自己的登入）與 `speclink`。啟動時各用 `--version` 檢查一次，少一個按鈕就停用，滑過去會說缺什麼。
+- **權限**：總裁、經理用 `claude -p` 執行，只給 `Read`、`Glob`、`Grep` 三個唯讀工具並用 `--permission-mode dontAsk`，不能改任何檔案；絕不使用 `bypassPermissions`。不經過命令列殼層啟動，交辦文字從標準輸入傳入。也不留對話紀錄（`--no-session-persistence`），所以不會在辦公室裡重複出現。
+- **額度**：走你 Claude Code 的登入額度，不用 API key。一件交辦最多呼叫總裁 1 次＋每個專案的經理 1 次，失敗時自動重試 1 次；再失敗就讓你選「重試」或「取消」。
+- **一次一件**：上一件還沒確認或取消前，不能再交辦。
+- **寫到哪裡**：只寫 `~/.ai-office/projects/<交辦編號>/dispatch.json`（交辦內容、專案、決策、每次呼叫的回合數與時間），伺服器重開時讀回；研究專案按開工時才建立同一資料夾底下的 `output/` 子資料夾。瀏覽器只看得到資料夾名稱的最後一段，看不到完整路徑。
+- **安全**：交辦與回答只接受這個頁面自己送的請求（特定標頭＋JSON＋同源），其他網站的網頁送不進來。遮罩的棟不能設成派工棟。
 
 ## 觀察來源（接其他 AI 工具）
 
@@ -193,7 +214,9 @@ server/src/
              feed.ts＝名字、動態牆、交接弧線；outputPreview.ts＝產出預覽
   observe/   觀察來源：sources.ts＝註冊表；transcriptWatcher.ts＝Claude Code 轉接器；
              changeProgress.ts＝tasks.md 進度
-  http/      本機伺服器：靜態檔、/api/state、/api/output/<代號>、/events（SSE）、/hook
+  dispatch/  交辦：設定與 claude／speclink 檢查（cli.ts）、claude -p 執行（runner.ts）、總裁與經理（president.ts、
+             manager.ts）、狀態機（engine.ts）、存檔（persist.ts）、畫面資料（view.ts）、示範模式（demoRunner.ts）
+  http/      本機伺服器：靜態檔、/api/state、/api/output/<代號>、/events（SSE）、/hook、/api/dispatch、/api/decisions/<代號>
   demo/      示範劇本（虛構資料）
   main.ts    npm start / npm run demo 的進入點
 web/src/
@@ -204,6 +227,7 @@ web/src/
   cards.ts   底部員工卡片與產出預覽視窗
   arcs.ts    卡片之間的交接弧線
   feed.ts    動態牆
+  dispatch.ts  交辦按鈕與交辦面板（送出、確認卡、刪站、重試）
 hook/        Notification Hook 腳本與安裝／移除
 scripts/     check-public.mjs＝個資掃描
 assets/kenney/  Kenney CC0 家具與迷你人物（附授權檔）

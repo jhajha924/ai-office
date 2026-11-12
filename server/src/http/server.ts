@@ -16,6 +16,8 @@ import type { OfficeView } from '../office/types.ts';
 export const DEFAULT_PORT = 5188;
 export const HOOK_HEADER = 'x-ai-office';
 export const HOOK_HEADER_VALUE = 'hook';
+/** The page's own requests (交辦, decisions) carry X-AI-Office: ui. */
+export const UI_HEADER_VALUE = 'ui';
 export const MAX_BODY_BYTES = 64 * 1024;
 /** Changes within this window go out as one `view` message. */
 export const COALESCE_MS = 1_000;
@@ -35,6 +37,9 @@ const CONTENT_TYPES: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
+/** What a dispatch handler answers: 2xx with an optional JSON body, or an error status with a Chinese message. */
+export type ApiReply = { ok: true; id?: string } | { ok: false; status: number; message: string };
+
 export interface OfficeServerOptions {
   port: number;
   getView: () => OfficeView;
@@ -43,6 +48,10 @@ export interface OfficeServerOptions {
   onHook: (body: unknown) => void;
   /** GET /api/output/<token>; absent = the route answers 404. */
   getOutput?: (token: string) => Promise<PreviewResult>;
+  /** POST /api/dispatch; absent = dispatch is off and the route answers 404. */
+  onDispatch?: (body: unknown) => ApiReply;
+  /** POST /api/decisions/<id>; absent = 404. */
+  onDecision?: (id: string, body: unknown) => ApiReply;
   webDir: string;
   assetsDir: string;
 }
@@ -137,6 +146,57 @@ export function createOfficeServer(options: OfficeServerOptions): OfficeServer {
     });
   }
 
+  /**
+   * The page's POST requests. A custom header plus a JSON content type force
+   * a browser to send a preflight, which fails because no CORS headers are
+   * ever sent: another site cannot post here. The Origin, when sent, must be
+   * this server.
+   */
+  function handleApi(req: http.IncomingMessage, res: http.ServerResponse, handler: ((body: unknown) => ApiReply) | undefined): void {
+    const origin = req.headers.origin;
+    const contentType = String(req.headers['content-type'] ?? '').toLowerCase();
+    if (
+      req.headers[HOOK_HEADER] !== UI_HEADER_VALUE ||
+      !contentType.startsWith('application/json') ||
+      (origin !== undefined && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`)
+    ) {
+      req.resume();
+      return reply(res, 403, '禁止存取');
+    }
+    if (Number(req.headers['content-length'] ?? 0) > MAX_BODY_BYTES) {
+      reply(res, 413, '內容太大');
+      req.destroy();
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let aborted = false;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES && !aborted) {
+        aborted = true;
+        reply(res, 413, '內容太大');
+        req.destroy();
+        return;
+      }
+      if (!aborted) chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (aborted) return;
+      if (!handler) return reply(res, 404, '找不到');
+      let body: unknown;
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+      } catch {
+        return reply(res, 400, '內容不是 JSON');
+      }
+      const result = handler(body);
+      if (!result.ok) return reply(res, result.status, result.message);
+      if (result.id !== undefined) return reply(res, 202, JSON.stringify({ id: result.id }), 'application/json; charset=utf-8');
+      reply(res, 204);
+    });
+  }
+
   function handleEvents(req: http.IncomingMessage, res: http.ServerResponse): void {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -163,6 +223,12 @@ export function createOfficeServer(options: OfficeServerOptions): OfficeServer {
     if (pathname.includes('\0')) return reply(res, 400, '網址格式錯誤');
 
     if (req.method === 'POST' && pathname === '/hook') return handleHook(req, res);
+    if (req.method === 'POST' && pathname === '/api/dispatch') return handleApi(req, res, options.onDispatch);
+    const decision = /^\/api\/decisions\/([0-9a-z]{1,40})$/.exec(pathname);
+    if (req.method === 'POST' && decision) {
+      const onDecision = options.onDecision;
+      return handleApi(req, res, onDecision ? (body) => onDecision(decision[1], body) : undefined);
+    }
     if (req.method !== 'GET' && req.method !== 'HEAD') return reply(res, 405, '不支援的方法');
     if (pathname === '/events') return handleEvents(req, res);
     const output = /^\/api\/output\/([0-9a-f]{16})$/.exec(pathname);
