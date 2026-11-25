@@ -3,9 +3,10 @@ import { fileURLToPath } from 'node:url';
 
 import { DEMO_CONFIG, DemoSource } from './demo/demoSource.ts';
 import type { LookupEnv, VersionCheck } from './dispatch/cli.ts';
-import { checkAvailability } from './dispatch/cli.ts';
+import { checkAvailability, speclinkReady } from './dispatch/cli.ts';
 import { DEMO_DISPATCH, DemoRunner } from './dispatch/demoRunner.ts';
 import { DispatchEngine, realFs } from './dispatch/engine.ts';
+import { fileHandoffWriter } from './dispatch/foreman.ts';
 import { defaultProjectsDir, fileStorage } from './dispatch/persist.ts';
 import { ClaudeRunner } from './dispatch/runner.ts';
 import type { AgentRunner } from './dispatch/types.ts';
@@ -40,6 +41,8 @@ export interface AppOptions {
   lookup?: LookupEnv;
   versionCheck?: VersionCheck;
   runner?: AgentRunner;
+  /** The folder check of code projects (tests replace it). */
+  speclinkReady?: (cwd: string) => Promise<boolean>;
 }
 
 export interface App {
@@ -133,6 +136,8 @@ export function createApp(options: AppOptions): App {
       now,
       isDir: realFs.isDir,
       makeDir: realFs.makeDir,
+      ...(availability.speclink ? { speclinkReady: options.speclinkReady ?? speclinkReady(availability.speclink) } : {}),
+      writeHandoff: fileHandoffWriter(warn),
     });
     if (availability.status !== 'ready') {
       warn(`[AI 辦公室] 派工已停用：${availability.status === 'missing-claude' ? '找不到 claude' : '找不到 speclink'}`);
@@ -142,7 +147,14 @@ export function createApp(options: AppOptions): App {
   const dispatchPanel = () =>
     dispatch
       ? panelView(
-          { status: dispatch.status, building: dispatch.settings.building, dispatches: dispatch.dispatches, active: () => dispatch!.active() },
+          {
+            status: dispatch.status,
+            building: dispatch.settings.building,
+            dispatches: dispatch.dispatches,
+            active: () => dispatch!.active(),
+            current: () => dispatch!.foreman.current(),
+            queue: () => dispatch!.foreman.queue(),
+          },
           config.get().departments,
         )
       : undefined;
@@ -153,6 +165,7 @@ export function createApp(options: AppOptions): App {
     onDispatch: (body) =>
       dispatch ? dispatch.submit(body && typeof body === 'object' ? (body as Record<string, unknown>).text : undefined) : { ok: false, status: 404, message: '找不到' },
     onDecision: (id, body) => (dispatch ? dispatch.answer(id, body) : { ok: false, status: 404, message: '找不到' }),
+    onStopProject: (id) => (dispatch ? dispatch.stopProject(id) : { ok: false, status: 404, message: '找不到' }),
     subscribe: (listener) => store.onChange(listener),
     // Demo mode previews come from the script's own text: no file is read.
     getOutput: (token) => previewOutput(store, config.get(), token, demo ? (p) => Promise.resolve(demo.previewText(p)) : undefined),

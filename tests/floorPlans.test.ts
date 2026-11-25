@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { roomName } from '../web/src/levels.ts';
-import { blockedCells, fixedSeat, isBlocking, onGrid, PLANS, targetsOf } from '../web/src/scene/floorPlans.ts';
+import { blockedCells, fixedSeat, isBlocking, isFixedSeat, onGrid, PLANS, targetsOf } from '../web/src/scene/floorPlans.ts';
 import { cellKey, DOOR, ELEVATOR } from '../web/src/scene/layout.ts';
 import { findPath } from '../web/src/scene/pathfinding.ts';
 
@@ -56,6 +56,11 @@ describe('floor plans', () => {
     expect(fixedSeat(PLANS.managers, { kind: 'manager', office: 3 })).toEqual(PLANS.managers.managerSeats![2]);
     expect(fixedSeat(PLANS.managers, { kind: 'manager', office: 7 })).toBeUndefined();
     expect(fixedSeat(PLANS.build, { kind: 'president' })).toBeUndefined();
+    // A worker (station seat) has no chair of its own: it takes an ordinary pod.
+    expect(fixedSeat(PLANS.build, { kind: 'station', level: 5 })).toBeUndefined();
+    expect(isFixedSeat({ kind: 'station', level: 5 })).toBe(false);
+    expect(isFixedSeat({ kind: 'manager', office: 1 })).toBe(true);
+    expect(isFixedSeat(undefined)).toBe(false);
   });
 
   it.each(plans)('$theme keeps the door, the elevator, every seat and point of interest walkable and connected', (plan) => {

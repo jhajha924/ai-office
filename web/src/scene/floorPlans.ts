@@ -522,9 +522,15 @@ export function targetsOf(plan: FloorPlan): Cell[] {
   ];
 }
 
-/** Where a dispatch seat is on this floor: the president's chair, or manager office n's chair. */
+/** The president and the managers have their own chairs; a worker (station) takes an ordinary pod. */
+export function isFixedSeat(seat: GroupSeat | undefined): boolean {
+  return !!seat && seat.kind !== 'station';
+}
+
+/** Where a dispatch seat is on this floor: the president's chair, or manager office n's chair; none for a worker. */
 export function fixedSeat(plan: FloorPlan, seat: GroupSeat): Seat | undefined {
   if (seat.kind === 'president') return plan.presidentSeat;
+  if (seat.kind === 'station') return undefined;
   return plan.managerSeats?.[seat.office - 1];
 }
 

@@ -46,12 +46,15 @@ const UI = (port: number) => ({ 'X-AI-Office': 'ui', 'Content-Type': 'applicatio
 
 class CountingRunner implements AgentRunner {
   calls = 0;
+  /** Workers (cut ③b): by default every call fails, so each stop stops at a stuck decision. */
+  worker: (request: AgentRequest) => RunResult = () => ({ ok: false, reason: '組員執行失敗', usage: { turns: 1, durationMs: 100 } });
   private readonly app: string;
   constructor(app: string) {
     this.app = app;
   }
   async run(request: AgentRequest): Promise<RunResult> {
     this.calls += 1;
+    if (request.role === 'worker') return this.worker(request);
     const output =
       request.role === 'president'
         ? { projects: [{ title: '作品集頁面', kind: 'code', cwd: this.app, brief: '加一頁作品集' }] }
@@ -69,11 +72,12 @@ let runner: CountingRunner;
 
 const BOTH: LookupEnv = { pathEnv: 'C:\\bin', platform: 'win32', isFile: (f) => f === 'C:\\bin\\claude.exe' || f === 'C:\\bin\\speclink.exe' };
 
-async function start(dispatch: boolean, lookup: LookupEnv = BOTH): Promise<void> {
+async function start(dispatch: boolean, lookup: LookupEnv = BOTH, worker?: CountingRunner['worker']): Promise<void> {
   const config: OfficeConfig = dispatch
     ? { ...DEFAULT_CONFIG, dispatch: { building: '辦公室', workRoot, models: { president: 'opus', manager: 'sonnet' } } }
     : DEFAULT_CONFIG;
   runner = new CountingRunner(appDir);
+  if (worker) runner.worker = worker;
   app = createApp({
     port: 0,
     config: { get: () => config },
@@ -82,6 +86,7 @@ async function start(dispatch: boolean, lookup: LookupEnv = BOTH): Promise<void>
     dispatchDir: path.join(tmp, 'ai-office-projects'),
     lookup,
     versionCheck: async () => true,
+    speclinkReady: async () => true,
     runner,
     webDir: path.join(tmp, 'web'),
     assetsDir: path.join(tmp, 'assets'),
@@ -181,7 +186,7 @@ describe('交辦 API', () => {
     const view = JSON.parse((await get(port, '/api/state')).body) as OfficeView;
     const decision = view.dispatch.active!.decisions[0];
     expect(decision.kind).toBe('confirm');
-    expect((await post(port, `/api/decisions/${decision.id}`, { headers: UI(port), body: '{"action":"start","route":["build","qa"]}' })).status).toBe(204);
+    expect((await post(port, `/api/decisions/${decision.id}`, { headers: UI(port), body: '{"action":"start","route":["spec","build","qa"]}' })).status).toBe(204);
     expect((await post(port, '/api/decisions/nosuch', { headers: UI(port), body: '{"action":"cancel"}' })).status).toBe(404);
   });
 });
@@ -209,7 +214,7 @@ describe('OfficeView.dispatch', () => {
             risks: ['圖片太大'],
             route: [
               { id: 'analysis', level: 3, name: '需求分析組', required: false },
-              { id: 'spec', level: 4, name: '規格企劃組', required: false },
+              { id: 'spec', level: 4, name: '規格企劃組', required: true },
               { id: 'build', level: 5, name: '工程組', required: false },
               { id: 'qa', level: 6, name: '測試品管組', required: true },
               { id: 'release', level: 7, name: '文件發佈組', required: false },
@@ -235,5 +240,76 @@ describe('OfficeView.dispatch', () => {
     const view = JSON.parse((await get(port, '/api/state')).body) as OfficeView;
     expect(view.dispatch.active).toBeUndefined();
     expect(view.dispatch.recent.map((d) => d.text)).toEqual(['事情 5', '事情 4', '事情 3', '事情 2', '事情 1']);
+  });
+});
+
+/** Plans one project over HTTP and presses 開工; returns its id. */
+async function startProject(): Promise<string> {
+  await post(port, '/api/dispatch', { headers: UI(port), body: '{"text":"相簿網站加一頁作品集"}' });
+  await app.dispatch!.idle();
+  const view = JSON.parse((await get(port, '/api/state')).body) as OfficeView;
+  const confirm = view.dispatch.active!.decisions[0];
+  const route = '{"action":"start","route":["analysis","spec","build","qa","release"]}';
+  expect((await post(port, `/api/decisions/${confirm.id}`, { headers: UI(port), body: route })).status).toBe(204);
+  await app.dispatch!.idle();
+  return view.dispatch.active!.projects[0].id;
+}
+
+const state = async (): Promise<OfficeView> => JSON.parse((await get(port, '/api/state')).body) as OfficeView;
+
+describe('決策回答與停止專案 API（③b）', () => {
+  it('question：answer 1～2000 字才收，其他動作 400；畫面資料帶 work 與選項', async () => {
+    await start(true, BOTH, () => ({
+      ok: true,
+      output: { outcome: 'question', summary: '列了假設', handoff: '', question: { text: '這頁要放幾件作品？', options: ['6 件', '12 件'] } },
+      usage: { turns: 1, durationMs: 100 },
+    }));
+    await startProject();
+    const raw = (await get(port, '/api/state')).body;
+    const view = JSON.parse(raw) as OfficeView;
+    expect(view.dispatch.work).toMatchObject({
+      title: '作品集頁面',
+      status: 'waiting',
+      stop: { index: 1, total: 5, level: 3, name: '需求分析組', required: false },
+      decisions: [{ kind: 'question', summary: '這頁要放幾件作品？', options: ['6 件', '12 件'] }],
+    });
+    expect(raw).not.toContain('secret-root-xyz');
+    const q = view.dispatch.work!.decisions[0].id;
+    const answer = (body: unknown) => post(port, `/api/decisions/${q}`, { headers: UI(port), body: JSON.stringify(body) });
+    expect((await answer({ action: 'answer', text: '' })).status).toBe(400);
+    expect((await answer({ action: 'answer', text: 'x'.repeat(2001) })).status).toBe(400);
+    expect((await answer({ action: 'retry' })).status).toBe(400);
+    expect((await answer({ action: 'skip' })).status).toBe(400);
+    expect((await answer({ action: 'answer', text: '12 件' })).status).toBe(204);
+  });
+
+  it('stuck：retry 與 skip 依站驗證，必經站 skip → 400「必經站不能跳過」；rejected 的動作不收', async () => {
+    await start(true);
+    await startProject();
+    // 3F is not required: skip works.
+    const first = (await state()).dispatch.work!;
+    expect(first.stop).toMatchObject({ name: '需求分析組', required: false });
+    expect(first.decisions[0].kind).toBe('stuck');
+    expect((await post(port, `/api/decisions/${first.decisions[0].id}`, { headers: UI(port), body: '{"action":"accept"}' })).status).toBe(400);
+    expect((await post(port, `/api/decisions/${first.decisions[0].id}`, { headers: UI(port), body: '{"action":"skip"}' })).status).toBe(204);
+    await app.dispatch!.idle();
+    // 4F is required once the route has 5F (cut ③b): skip is refused, retry is taken.
+    const spec = (await state()).dispatch.work!;
+    expect(spec.stop).toMatchObject({ name: '規格企劃組', required: true });
+    const skip = await post(port, `/api/decisions/${spec.decisions[0].id}`, { headers: UI(port), body: '{"action":"skip"}' });
+    expect(skip).toEqual({ status: 400, body: '必經站不能跳過' });
+    expect((await post(port, `/api/decisions/${spec.decisions[0].id}`, { headers: UI(port), body: '{"action":"retry"}' })).status).toBe(204);
+  });
+
+  it('POST /api/projects/<id>/stop：缺標頭 403、成功 204、已結束 404；最近的交辦顯示已停止', async () => {
+    await start(true);
+    const id = await startProject();
+    expect((await post(port, `/api/projects/${id}/stop`, { headers: { 'Content-Type': 'application/json' }, body: '{}' })).status).toBe(403);
+    expect((await post(port, `/api/projects/${id}/stop`, { headers: UI(port), body: '{}' })).status).toBe(204);
+    expect((await post(port, `/api/projects/${id}/stop`, { headers: UI(port), body: '{}' })).status).toBe(404);
+    expect((await post(port, '/api/projects/d20991231-001-1/stop', { headers: UI(port), body: '{}' })).status).toBe(404);
+    const view = await state();
+    expect(view.dispatch.work).toBeUndefined();
+    expect(view.dispatch.recent[0].projects[0].status).toBe('stopped');
   });
 });

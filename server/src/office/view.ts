@@ -6,7 +6,7 @@ import { skillTitle, subagentTitle } from './roster.ts';
 import { baseName, STATE_BUBBLES, subtaskStatus, toolStatus } from './statusText.ts';
 import type { ActorState, GroupState, OfficeStore } from './store.ts';
 import { startOfLocalDay } from './store.ts';
-import type { ActorStatus, ActorView, BuildingView, DispatchPanelView, GroupView, ModelFamily, OfficeView, OutputRef } from './types.ts';
+import type { ActorStatus, ActorView, BuildingView, DispatchPanelView, GroupView, ModelFamily, OfficeView, OutputRef, Seat } from './types.ts';
 import { LOBBY_LEVEL, levelForSkills, levelList, MANAGERS_LEVEL } from './levels.ts';
 
 /**
@@ -18,8 +18,16 @@ import { LOBBY_LEVEL, levelForSkills, levelList, MANAGERS_LEVEL } from './levels
 
 export const MAIN_TITLE = '主對話';
 /** Titles of the dispatch seats. */
-export const SEAT_TITLES = { president: '總裁', manager: '經理' } as const;
+/** The floor a seat fixes: 1F for the president, 2F for managers, the station's floor for a worker. */
+function seatLevel(seat: Seat): number {
+  if (seat.kind === 'station') return seat.level;
+  return seat.kind === 'president' ? LOBBY_LEVEL : MANAGERS_LEVEL;
+}
+
+export const SEAT_TITLES = { president: '總裁', manager: '經理', station: '組員' } as const;
 export const SEAT_WAITING_BUBBLE = '等你確認路線';
+/** A worker that handed a question or a failure to the decision box. */
+export const STATION_WAITING_BUBBLE = '等你決定';
 
 export function modelFamily(model: string | undefined): ModelFamily {
   const m = (model ?? '').toLowerCase();
@@ -94,7 +102,14 @@ function actorView(
     if (group.pendingAsks.size > 0 || group.hookWaiting) {
       status = 'waiting';
       // A manager waits for the route to be confirmed, not for a permission prompt.
-      bubble = group.pendingAsks.size > 0 ? '等你回答' : group.seat ? SEAT_WAITING_BUBBLE : STATE_BUBBLES.waiting;
+      bubble =
+        group.pendingAsks.size > 0
+          ? '等你回答'
+          : group.seat
+            ? group.seat.kind === 'station'
+              ? STATION_WAITING_BUBBLE
+              : SEAT_WAITING_BUBBLE
+            : STATE_BUBBLES.waiting;
       tool = undefined;
     } else if (skill && actor.status === 'running') {
       // While a skill employee is in, the work shows on its bubble instead.
@@ -164,7 +179,7 @@ export function buildView(store: OfficeStore, config: OfficeConfig, now: number,
     groups.push({
       sessionId: group.sessionId,
       building,
-      level: group.seat ? (group.seat.kind === 'president' ? LOBBY_LEVEL : MANAGERS_LEVEL) : levelForSkills(group.skills, config),
+      level: group.seat ? seatLevel(group.seat) : levelForSkills(group.skills, config),
       ...(group.seat ? { seat: { ...group.seat } } : {}),
       label,
       actors,

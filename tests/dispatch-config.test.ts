@@ -91,6 +91,24 @@ describe('dispatch 設定驗證 (spec Example)', () => {
     expect(() => withDispatch(dispatch)).toThrow(field);
   });
 
+  it.each([
+    ['models.worker 空字串', { models: { worker: '' } }, 'dispatch.models.worker'],
+    ['workerMaxTurns 0', { workerMaxTurns: 0 }, 'dispatch.workerMaxTurns'],
+    ['workerMaxTurns 501', { workerMaxTurns: 501 }, 'dispatch.workerMaxTurns'],
+    ['workerTimeoutMin 1.5', { workerTimeoutMin: 1.5 }, 'dispatch.workerTimeoutMin'],
+    ['workerTimeoutMin 121', { workerTimeoutMin: 121 }, 'dispatch.workerTimeoutMin'],
+  ])('組員設定 %s → ShapeError %s', (_label, extra, field) => {
+    expect(() => withDispatch({ building: '私人樓', workRoot: 'D:\\work\\', ...extra })).toThrow(field);
+  });
+
+  it('組員設定：models.worker、workerMaxTurns 1～500、workerTimeoutMin 1～120 照收；不給時不出現（用預設 sonnet／150／30）', () => {
+    const d = withDispatch({ building: '私人樓', workRoot: 'D:\\work\\', models: { worker: 'opus' }, workerMaxTurns: 500, workerTimeoutMin: 1 }).dispatch;
+    expect(d).toMatchObject({ models: { president: 'opus', manager: 'sonnet', worker: 'opus' }, workerMaxTurns: 500, workerTimeoutMin: 1 });
+    const plain = withDispatch({ building: '私人樓', workRoot: 'D:\\work\\' }).dispatch;
+    expect(plain?.workerMaxTurns).toBeUndefined();
+    expect(plain?.models.worker).toBeUndefined();
+  });
+
   it('models 只給一個時另一個用預設，claudePath 照收', () => {
     const d = withDispatch({ building: '私人樓', workRoot: 'D:\\work\\', models: { manager: 'opus' }, claudePath: 'C:\\x\\claude.exe' }).dispatch;
     expect(d?.models).toEqual({ president: 'opus', manager: 'opus' });

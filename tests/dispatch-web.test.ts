@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import type { DispatchPanelView, DispatchView, ProjectView } from '../server/src/office/types.ts';
-import { buttonModel, confirmCards, drawerModel, QUEUED_HINT, recentModel, routeToStart, viewAfterDispatch } from '../web/src/dispatch.ts';
+import { buttonModel, confirmCards, drawerModel, projectStatusText, recentModel, routeToStart, viewAfterDispatch, workModel } from '../web/src/dispatch.ts';
+import type { WorkView } from '../server/src/office/types.ts';
+import { QA_CHOICES } from '../server/src/dispatch/worker.ts';
 
 const project = (over: Partial<ProjectView> = {}): ProjectView => ({
   id: 'd20261110-001-1',
@@ -101,7 +103,7 @@ describe('確認卡的刪站', () => {
     expect(recentModel(done)).toEqual({
       text: '相簿網站加一頁作品集',
       projects: [
-        { title: '作品集頁面', status: '排隊中（等派工引擎）' },
+        { title: '作品集頁面', status: '排隊中' },
         { title: '競品研究', status: '已取消' },
       ],
       usage: '4 回合・61 秒',
@@ -120,21 +122,89 @@ describe('送出後看哪裡 (spec Example)', () => {
   });
 });
 
-describe('開工後的說明 (Scenario)', () => {
-  it('最近交辦有排隊中的專案 → 標題下方顯示說明', () => {
-    const done = dispatch({ status: 'done', decisions: [], projects: [project({ status: 'queued' })] });
-    const model = drawerModel(panel(undefined, { recent: [done] }));
-    expect(model.kind === 'form' && model.hint).toBe('排隊中的專案要等下一版的派工引擎才會開工，目前 3F～7F 不會有人上工。');
-    expect(QUEUED_HINT).toBe('排隊中的專案要等下一版的派工引擎才會開工，目前 3F～7F 不會有人上工。');
+const work = (over: Partial<WorkView> = {}): WorkView => ({
+  dispatch: 'd20261112-001',
+  project: 'd20261112-001-1',
+  title: '作品集頁面',
+  status: 'waiting',
+  stop: { index: 1, total: 5, level: 3, name: '需求分析組', required: false },
+  rejections: 0,
+  decisions: [{ id: 'w1', kind: 'question', project: 'd20261112-001-1', summary: '這頁要放幾件作品？', options: ['6 件', '12 件'] }],
+  ...over,
+});
+
+describe('最近交辦的專案狀態 (spec Example)', () => {
+  it.each([
+    [{ status: 'queued', ahead: 1 }, '排隊中（前面還有 1 個）'],
+    [{ status: 'running', at: { level: 5, name: '工程組' } }, '進行中（5F 工程組）'],
+    [{ status: 'waiting' }, '等你決定'],
+    [{ status: 'done' }, '已完成'],
+    [{ status: 'stopped' }, '已停止'],
+    [{ status: 'cancelled' }, '已取消'],
+  ] as const)('%j → %s', (over, text) => {
+    expect(projectStatusText(project(over as Partial<ProjectView>))).toBe(text);
   });
 
-  it('只有已取消的專案 → 不顯示', () => {
-    const done = dispatch({ status: 'done', decisions: [], projects: [project({ status: 'cancelled' })] });
-    const model = drawerModel(panel(undefined, { recent: [done] }));
-    expect(model.kind === 'form' && model.hint).toBeUndefined();
+  it('已完成附總結；③a 的排隊說明不再出現', () => {
+    const d = dispatch({ status: 'done', decisions: [], projects: [project({ status: 'done', summary: '加了作品集頁' })] });
+    expect(recentModel(d).projects).toEqual([{ title: '作品集頁面', status: '已完成', summary: '加了作品集頁' }]);
+    const model = drawerModel(panel(undefined, { recent: [dispatch({ status: 'done', decisions: [], projects: [project({ status: 'queued' })] })] }));
+    expect(JSON.stringify(model)).not.toContain('派工引擎');
+  });
+});
+
+describe('執行中區塊', () => {
+  it('組員提問 (Scenario)：徽章 1，執行中區塊有問題、兩個選項', () => {
+    const p = panel(undefined, { work: work() });
+    expect(buttonModel(p).badge).toBe(1);
+    expect(workModel(p.work)).toEqual({
+      project: 'd20261112-001-1',
+      line: '作品集頁面：3F 需求分析組（第 1／共 5 站）',
+      waiting: true,
+      cards: [{ kind: 'question', decision: 'w1', text: '這頁要放幾件作品？', options: ['6 件', '12 件'] }],
+    });
   });
 
-  it('沒有最近交辦 → 不顯示', () => {
-    expect(drawerModel(panel())).toEqual({ kind: 'form', building: '私人樓', recent: [] });
+  it('stuck 在必經站不顯示跳過；rejected 帶 findings；blocked 只有重試', () => {
+    const cards = workModel(
+      work({
+        stop: { index: 4, total: 5, level: 6, name: '測試品管組', required: true },
+        decisions: [
+          { id: 'a', kind: 'stuck', summary: '6F 測試品管組 執行失敗：組員逾時' },
+          { id: 'b', kind: 'rejected', summary: '6F 第 3 次不合格：缺測試', findings: ['缺測試'] },
+          { id: 'c', kind: 'blocked', summary: '「album」還沒有 speclink' },
+        ],
+      }),
+    )!.cards;
+    expect(cards).toEqual([
+      { kind: 'stuck', decision: 'a', text: '6F 測試品管組 執行失敗：組員逾時', canSkip: false },
+      { kind: 'rejected', decision: 'b', text: '6F 第 3 次不合格：缺測試', findings: ['缺測試'] },
+      { kind: 'blocked', decision: 'c', text: '「album」還沒有 speclink' },
+    ]);
+    expect(workModel(work({ decisions: [{ id: 'a', kind: 'stuck', summary: 'x' }] }))!.cards[0]).toMatchObject({ canSkip: true });
+  });
+
+  it('徽章＝規劃中的決策＋執行中的決策；沒有執行中專案時沒有區塊', () => {
+    expect(buttonModel(panel(dispatch(), { work: work() })).badge).toBe(2);
+    expect(workModel(undefined)).toBeUndefined();
+  });
+});
+
+describe('6F 檢查方式的卡片', () => {
+  it('三個按鈕，英文後面用括號說明在做什麼，文字與伺服器一致', () => {
+    const cards = workModel(work({ decisions: [{ id: 'q', kind: 'qa', summary: '6F 測試品管要跑哪一種檢查？' }] }))!.cards;
+    expect(cards).toEqual([
+      {
+        kind: 'qa',
+        decision: 'q',
+        text: '6F 測試品管要跑哪一種檢查？',
+        choices: [
+          { mode: 'review', label: 'review（看程式寫得好不好：正確性、可讀性、邊界情況）' },
+          { mode: 'verify', label: 'verify（看有沒有照規格做完：需求、任務、情境逐條對）' },
+          { mode: 'both', label: 'review + verify（兩個都跑，最完整也最花額度）' },
+        ],
+      },
+    ]);
+    expect(cards[0].kind === 'qa' && cards[0].choices).toEqual(QA_CHOICES);
   });
 });

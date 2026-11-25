@@ -80,6 +80,13 @@ export function normalizeRoute(
   const notes: string[] = [];
   const qa = departments.find((d, i) => departmentTheme(d, i) === 'qa');
   if (ids.length === 0) return { ok: false, reason: '經理排的路線沒有任何可用部門' };
+  // Code that gets built needs a spec first: the build worker implements a speclink change.
+  const spec = departments.find((d, i) => departmentTheme(d, i) === 'spec');
+  const builds = kind === 'code' && ids.some((id) => byId.get(id)!.theme === 'build');
+  if (builds && spec && !ids.includes(spec.id)) {
+    ids.push(spec.id);
+    notes.push(`已補上 ${spec.floor}F ${spec.name}：改程式要先有規格`);
+  }
   if (kind === 'code' && qa && !ids.includes(qa.id)) {
     ids.push(qa.id);
     notes.push(`已補上 ${qa.floor}F ${qa.name}：改程式的專案一定要經過`);
@@ -92,7 +99,7 @@ export function normalizeRoute(
     return {
       id,
       doneWhen: given && chars(given) <= DONE_WHEN_MAX ? given : DEFAULT_DONE_WHEN[byId.get(id)!.theme],
-      required: kind === 'code' && qa !== undefined && id === qa.id,
+      required: kind === 'code' && ((qa !== undefined && id === qa.id) || (builds && spec !== undefined && id === spec.id)),
     };
   });
   const risks = (Array.isArray(output.risks) ? output.risks : [])

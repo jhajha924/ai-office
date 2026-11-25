@@ -14,7 +14,7 @@ import { choosePoi, dwellMs } from './idleLife.ts';
 import type { Cell, Facing, Furniture } from './layout.ts';
 import { cellKey, DOOR, ELEVATOR, GRID_H, GRID_W } from './layout.ts';
 import type { FloorPlan } from './floorPlans.ts';
-import { blockedCells, fixedSeat, PLANS } from './floorPlans.ts';
+import { blockedCells, fixedSeat, isFixedSeat, PLANS } from './floorPlans.ts';
 import { buildProp } from './props.ts';
 import { findPath } from './pathfinding.ts';
 import { placeFor, PodAllocator } from './podAllocator.ts';
@@ -546,7 +546,7 @@ export class Office {
   /** Session ids of a building that have no pod on their floor (the sidebar lists them as overflow). */
   overflow(view: OfficeView, building: string): string[] {
     return view.groups
-      .filter((g) => g.building === building && !g.seat && !this.allocator(g.building, g.level).podOf(g.sessionId))
+      .filter((g) => g.building === building && !isFixedSeat(g.seat) && !this.allocator(g.building, g.level).podOf(g.sessionId))
       .map((g) => g.sessionId);
   }
 
@@ -579,9 +579,9 @@ export class Office {
     for (const { building, level, groups } of floors.values()) {
       const alloc = this.allocator(building, level);
       // The president and the managers have their own chairs, not a pod.
-      alloc.update(groups.filter((g) => !g.seat).map((g) => g.sessionId));
+      alloc.update(groups.filter((g) => !isFixedSeat(g.seat)).map((g) => g.sessionId));
       for (const group of groups) {
-        if (group.seat) {
+        if (group.seat && isFixedSeat(group.seat)) {
           const spot = fixedSeat(this.planOf(building, level), group.seat);
           const lead = group.actors[0];
           if (spot && lead) desired.set(lead.id, { group, actor: lead, place: spot });

@@ -82,12 +82,20 @@ export interface DispatchSettings {
   building: string;
   /** Code projects must live in a folder under this root. */
   workRoot: string;
-  models: { president: string; manager: string };
+  /** worker is optional here; DEFAULT_WORKER.model applies when it is absent. */
+  models: { president: string; manager: string; worker?: string };
   /** Explicit claude executable; otherwise it is looked up on PATH. */
   claudePath?: string;
+  /** Turn cap of one worker call (1..500); DEFAULT_WORKER.maxTurns when absent. */
+  workerMaxTurns?: number;
+  /** Minutes before a worker call is ended (1..120); DEFAULT_WORKER.timeoutMin when absent. */
+  workerTimeoutMin?: number;
 }
 
 export const DEFAULT_DISPATCH_MODELS: DispatchSettings['models'] = { president: 'opus', manager: 'sonnet' };
+
+/** The workers' defaults (cut ③b). */
+export const DEFAULT_WORKER = { model: 'sonnet', maxTurns: 150, timeoutMin: 30 } as const;
 
 export interface OfficeConfig {
   buildings: { rules: BuildingRule[]; default: BuildingTarget };
@@ -337,9 +345,17 @@ function parseDispatch(value: unknown, buildings: OfficeConfig['buildings']): Di
         ? DEFAULT_DISPATCH_MODELS[key]
         : nonEmptyString((value.models as Record<string, unknown>)[key], `dispatch.models.${key}`);
     models = { president: pick('president'), manager: pick('manager') };
+    const worker = (value.models as Record<string, unknown>).worker;
+    if (worker !== undefined) models.worker = nonEmptyString(worker, 'dispatch.models.worker');
   }
   const out: DispatchSettings = { building, workRoot, models };
   if (value.claudePath !== undefined) out.claudePath = nonEmptyString(value.claudePath, 'dispatch.claudePath');
+  const whole = (raw: unknown, min: number, max: number, at: string): number => {
+    if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < min || raw > max) throw new ShapeError(at);
+    return raw;
+  };
+  if (value.workerMaxTurns !== undefined) out.workerMaxTurns = whole(value.workerMaxTurns, 1, 500, 'dispatch.workerMaxTurns');
+  if (value.workerTimeoutMin !== undefined) out.workerTimeoutMin = whole(value.workerTimeoutMin, 1, 120, 'dispatch.workerTimeoutMin');
   return out;
 }
 

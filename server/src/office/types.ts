@@ -24,8 +24,11 @@ export type OfficeEventKind =
 
 export type OfficeEventSource = 'observe' | 'hook' | 'demo' | 'dispatch';
 
-/** A fixed seat instead of a pod: the president's desk on 1F, or manager office 1..6 on 2F. */
-export type Seat = { kind: 'president' } | { kind: 'manager'; office: number };
+/**
+ * Where a dispatch group sits: the president's desk on 1F, manager office
+ * 1..6 on 2F (fixed seats), or a worker on its station's floor (an ordinary pod).
+ */
+export type Seat = { kind: 'president' } | { kind: 'manager'; office: number } | { kind: 'station'; level: number };
 
 export interface OfficeEvent {
   kind: OfficeEventKind;
@@ -170,6 +173,21 @@ export interface DispatchPanelView {
   active?: DispatchView;
   /** The latest 5 finished dispatches, newest first. */
   recent: DispatchView[];
+  /** The project holding the work slot (cut ③b), with its open decisions. */
+  work?: WorkView;
+  /** Projects waiting in the queue behind it. */
+  queued?: number;
+}
+
+export interface WorkView {
+  dispatch: string;
+  project: string;
+  title: string;
+  status: 'running' | 'waiting';
+  /** 1-based stop of total; the stop's floor and department. */
+  stop: { index: number; total: number; level: number; name: string; required: boolean };
+  rejections: number;
+  decisions: DecisionView[];
 }
 
 export interface DispatchView {
@@ -195,14 +213,24 @@ export interface ProjectView {
   route: { id: string; level: number; name: string; doneWhen: string; required: boolean }[];
   notes: string[];
   risks: string[];
-  status: 'planning' | 'confirm' | 'queued' | 'cancelled';
+  status: 'planning' | 'confirm' | 'queued' | 'cancelled' | 'running' | 'waiting' | 'done' | 'stopped';
+  /** queued: projects ahead of it in the queue. */
+  ahead?: number;
+  /** running: the stop at work. */
+  at?: { level: number; name: string };
+  /** done: the summary of all stops (first 100 characters). */
+  summary?: string;
 }
 
 export interface DecisionView {
   id: string;
-  kind: 'confirm' | 'retry';
+  kind: 'confirm' | 'retry' | 'question' | 'stuck' | 'rejected' | 'blocked' | 'qa';
   project?: string;
   summary: string;
+  /** question: suggested answers. */
+  options?: string[];
+  /** rejected: the qa findings. */
+  findings?: string[];
 }
 
 export interface OfficeView {

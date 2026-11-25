@@ -5,16 +5,18 @@ import type { Department, DispatchSettings } from '../office/config.ts';
 import type { OfficeEvent, OfficeEventKind, Seat } from '../office/types.ts';
 import { mainActorId } from '../office/types.ts';
 import type { DispatchStatus } from './cli.ts';
+import { Foreman, type ForemanDeps } from './foreman.ts';
 import { MANAGER_SCHEMA, managerPrompt, normalizeRoute } from './manager.ts';
 import type { DispatchStorage } from './persist.ts';
 import { checkPresident, PRESIDENT_SCHEMA, presidentPrompt } from './president.ts';
-import type { AgentRequest, AgentRunner, CallUsage, Decision, Dispatch, Project, RunResult } from './types.ts';
+import type { AgentRequest, AgentRole, AgentRunner, CallUsage, Decision, DecisionKind, Dispatch, Project, RunResult } from './types.ts';
 
 /**
- * The dispatch engine of cut ③a: request → president → managers → the user
- * confirms each route. One request at a time; nothing runs after "開工" yet
- * (cut ③b). Every state change is saved and announced; the president and the
- * managers show up in the office through ordinary OfficeEvents.
+ * The dispatch engine: request → president → managers → the user confirms
+ * each route (cut ③a); after 開工 the foreman runs the queued projects stop by
+ * stop (cut ③b, foreman.ts). One request is planned at a time. Every state
+ * change is saved and announced; everyone shows up in the office through
+ * ordinary OfficeEvents.
  */
 
 export const TEXT_MAX = 2000;
@@ -55,6 +57,10 @@ export interface EngineDeps {
   makeDir?: (dir: string) => void;
   isDir?: (dir: string) => boolean;
   onChange?: () => void;
+  /** cut ③b: the foreman's folder check, hand-off writer and session ids (see ForemanDeps). */
+  speclinkReady?: ForemanDeps['speclinkReady'];
+  writeHandoff?: ForemanDeps['writeHandoff'];
+  newSession?: () => string;
 }
 
 const chars = (s: string): number => [...s].length;
@@ -69,6 +75,7 @@ function localDate(at: number): string {
 
 export class DispatchEngine {
   readonly dispatches: Dispatch[] = [];
+  readonly foreman: Foreman;
   private running: Promise<void> = Promise.resolve();
   private decisionSeq = 0;
 
@@ -76,7 +83,28 @@ export class DispatchEngine {
 
   constructor(deps: EngineDeps) {
     this.deps = deps;
+    this.foreman = new Foreman({
+      settings: deps.settings,
+      departments: deps.departments,
+      runner: deps.runner,
+      projectsDir: deps.projectsDir,
+      dispatches: () => this.dispatches,
+      save: (dispatch) => this.save(dispatch),
+      decide: (dispatch, kind, summary, project, extra) => {
+        const q = { ...this.decision(kind, summary, project), ...extra };
+        dispatch.decisions.push(q);
+        return q;
+      },
+      emit: deps.emit,
+      setLabel: deps.setLabel,
+      now: deps.now,
+      newSession: deps.newSession ?? (() => crypto.randomUUID()),
+      ...(deps.speclinkReady ? { speclinkReady: deps.speclinkReady } : {}),
+      ...(deps.writeHandoff ? { writeHandoff: deps.writeHandoff } : {}),
+    });
     for (const loaded of deps.storage?.loadAll() ?? []) this.restore(loaded);
+    this.foreman.restore();
+    if (deps.status === 'ready') this.foreman.drive();
   }
 
   get status(): DispatchStatus {
@@ -87,9 +115,16 @@ export class DispatchEngine {
     return this.deps.settings;
   }
 
-  /** Resolves when the president / manager calls in flight are finished (tests, shutdown). */
-  idle(): Promise<void> {
-    return this.running;
+  /** Resolves when the president / manager / worker calls in flight are finished (tests, shutdown). */
+  async idle(): Promise<void> {
+    await this.running;
+    await this.foreman.idle();
+  }
+
+  /** 停止專案 (POST /api/projects/<id>/stop). */
+  stopProject(projectId: string): EngineReply {
+    if (this.deps.status === 'off') return { ok: false, status: 404, message: '找不到' };
+    return this.foreman.stop(projectId);
   }
 
   active(): Dispatch | undefined {
@@ -127,6 +162,7 @@ export class DispatchEngine {
     if (!found) return { ok: false, status: 404, message: '找不到這件決策，或已經回答過了' };
     const { dispatch, decision } = found;
     const action = body && typeof body === 'object' ? (body as Record<string, unknown>).action : undefined;
+    if (decision.kind !== 'retry' && decision.kind !== 'confirm') return this.foreman.answer(dispatch, decision, body);
 
     if (decision.kind === 'retry') {
       if (action === 'retry') {
@@ -173,8 +209,10 @@ export class DispatchEngine {
     decision.status = 'answered';
     project.route = project.route.filter((s) => kept.has(s.id));
     project.status = 'queued';
+    project.startedAt = this.deps.now();
     if (project.kind === 'research') this.deps.makeDir?.(project.cwd);
     this.managerDone(dispatch, project);
+    this.foreman.drive();
     return { ok: true };
   }
 
@@ -306,7 +344,7 @@ export class DispatchEngine {
 
   // ── helpers ───────────────────────────────────────────────────
 
-  private record(dispatch: Dispatch, role: 'president' | 'manager', project: string | undefined, reason: string | undefined, usage?: CallUsage): void {
+  private record(dispatch: Dispatch, role: AgentRole, project: string | undefined, reason: string | undefined, usage?: CallUsage): void {
     dispatch.calls.push({
       role,
       ...(project ? { project } : {}),
@@ -364,7 +402,7 @@ export class DispatchEngine {
     return (index % MANAGER_OFFICES) + 1;
   }
 
-  private decision(kind: Decision['kind'], summary: string, project?: string): Decision {
+  private decision(kind: DecisionKind, summary: string, project?: string): Decision {
     return { id: `q${this.deps.now().toString(36)}${(++this.decisionSeq).toString(36)}`, kind, summary, status: 'open', ...(project ? { project } : {}) };
   }
 

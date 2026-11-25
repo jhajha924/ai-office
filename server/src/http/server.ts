@@ -52,6 +52,8 @@ export interface OfficeServerOptions {
   onDispatch?: (body: unknown) => ApiReply;
   /** POST /api/decisions/<id>; absent = 404. */
   onDecision?: (id: string, body: unknown) => ApiReply;
+  /** POST /api/projects/<id>/stop (停止專案); absent = 404. */
+  onStopProject?: (id: string, body: unknown) => ApiReply;
   webDir: string;
   assetsDir: string;
 }
@@ -228,6 +230,11 @@ export function createOfficeServer(options: OfficeServerOptions): OfficeServer {
     if (req.method === 'POST' && decision) {
       const onDecision = options.onDecision;
       return handleApi(req, res, onDecision ? (body) => onDecision(decision[1], body) : undefined);
+    }
+    const stopProject = /^\/api\/projects\/(d\d{8}-\d{3}-\d{1,2})\/stop$/.exec(pathname);
+    if (req.method === 'POST' && stopProject) {
+      const onStop = options.onStopProject;
+      return handleApi(req, res, onStop ? (body) => onStop(stopProject[1], body) : undefined);
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return reply(res, 405, '不支援的方法');
     if (pathname === '/events') return handleEvents(req, res);

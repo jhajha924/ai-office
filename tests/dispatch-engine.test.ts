@@ -58,6 +58,36 @@ describe('runner', () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 
+  it('組員：參數帶 session、工具清單與回合上限；逾時以請求的時間為準並回報「組員逾時」；可以中途停止', async () => {
+    const argsFile = path.join(TMP, 'worker-args.json');
+    const worker: AgentRequest = {
+      role: 'worker',
+      model: 'sonnet',
+      schema: { type: 'object' },
+      cwd: TMP,
+      prompt: `MODE:ok ARGS:${argsFile} OUTPUT:{"outcome":"done","summary":"s","handoff":"h"}`,
+      input: { role: 'worker', theme: 'build', kind: 'code', title: 't', resumed: false },
+      tools: 'Read,Edit(./**)',
+      sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      maxTurns: 9,
+    };
+    expect((await fakeRunner().run(worker)).ok).toBe(true);
+    const seen = JSON.parse(fs.readFileSync(argsFile, 'utf-8'));
+    expect(seen.argv).toEqual(claudeArgs(worker));
+    expect(seen.argv.slice(-5)).toEqual(['Read,Edit(./**)', '--max-turns', '9', '--session-id', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee']);
+    expect(seen.argv).not.toContain('--no-session-persistence');
+
+    const slow = await fakeRunner(60_000).run({ ...worker, prompt: 'MODE:sleep', timeoutMs: 400 });
+    expect(!slow.ok && slow.reason).toBe('組員逾時');
+    expect((await fakeRunner().run({ ...worker, prompt: 'MODE:exit1' })).ok).toBe(false);
+
+    const runner = fakeRunner(60_000);
+    const pending = runner.run({ ...worker, prompt: 'MODE:sleep', sessionId: 'stop-me' });
+    setTimeout(() => runner.cancel('stop-me'), 200);
+    const stopped = await pending;
+    expect(!stopped.ok && stopped.reason).toBe('組員已停止');
+  });
+
   it('執行檔不存在 → 「總裁無法啟動」', async () => {
     const result = await new ClaudeRunner({ file: path.join(TMP, 'no-claude.exe') }).run(request('MODE:ok'));
     expect(!result.ok && result.reason).toBe('總裁無法啟動');
@@ -122,6 +152,8 @@ describe('經理：路線整理 (spec Example，內建五部門)', () => {
     ['code', ['analysis', 'spec', 'build', 'qa', 'release'], ['analysis', 'spec', 'build', 'qa', 'release'], []],
     ['code', ['build', 'spec'], ['spec', 'build', 'qa'], ['已補上 6F 測試品管組：改程式的專案一定要經過']],
     ['research', ['release', 'analysis', 'analysis'], ['analysis', 'release'], []],
+    ['code', ['build', 'qa', 'release'], ['spec', 'build', 'qa', 'release'], ['已補上 4F 規格企劃組：改程式要先有規格']],
+    ['code', ['build'], ['spec', 'build', 'qa'], ['已補上 4F 規格企劃組：改程式要先有規格', '已補上 6F 測試品管組：改程式的專案一定要經過']],
     ['code', ['qa'], ['qa'], []],
   ] as const)('%s %j → %j', (kind, route, expected, notes) => {
     const result = normalizeRoute({ route: [...route], doneWhen: {}, risks: [] }, kind, D);
@@ -129,6 +161,23 @@ describe('經理：路線整理 (spec Example，內建五部門)', () => {
     if (!result.ok) return;
     expect(result.route.map((s) => s.id)).toEqual(expected);
     expect(result.notes).toEqual(notes);
+  });
+
+  it('經理跳過規格企劃站 (Scenario)：補上 4F，4F 與 6F 都是必經站', () => {
+    const result = normalizeRoute({ route: ['build', 'qa', 'release'], doneWhen: {}, risks: [] }, 'code', D);
+    expect(result.ok && result.route.map((s) => [s.id, s.required])).toEqual([
+      ['spec', true],
+      ['build', false],
+      ['qa', true],
+      ['release', false],
+    ]);
+    expect(result.ok && result.notes).toEqual(['已補上 4F 規格企劃組：改程式要先有規格']);
+    // No build stop: nothing to add, and 4F stays removable.
+    const noBuild = normalizeRoute({ route: ['spec', 'qa'], doneWhen: {}, risks: [] }, 'code', D);
+    expect(noBuild.ok && noBuild.route.map((s) => [s.id, s.required])).toEqual([
+      ['spec', false],
+      ['qa', true],
+    ]);
   });
 
   it('research marketing → （空）不合規則', () => {
@@ -141,7 +190,8 @@ describe('經理：路線整理 (spec Example，內建五部門)', () => {
   it('經理漏了測試品管站 (Scenario)：4F → 5F → 6F，qa 為必經', () => {
     const result = normalizeRoute({ route: ['build', 'spec'], doneWhen: { build: '首頁多一個連結' }, risks: ['圖片太大'] }, 'code', D);
     expect(result.ok && result.route).toEqual([
-      { id: 'spec', doneWhen: '規格驗證通過', required: false },
+      // With a build stop the spec stop is required too (cut ③b).
+      { id: 'spec', doneWhen: '規格驗證通過', required: true },
       { id: 'build', doneWhen: '首頁多一個連結', required: false },
       { id: 'qa', doneWhen: '測試全過、審查沒有必修項', required: true },
     ]);

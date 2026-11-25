@@ -21,6 +21,19 @@ export interface DispatchStorage {
   loadAll(): Dispatch[];
 }
 
+const PROJECT_STATUSES = new Set(['planning', 'confirm', 'queued', 'cancelled', 'running', 'waiting', 'done', 'stopped']);
+const DECISION_KINDS = new Set(['confirm', 'retry', 'question', 'stuck', 'rejected', 'blocked', 'qa']);
+
+/** A status or kind this version does not know means a file it cannot run safely. */
+function knownParts(d: Record<string, unknown>): boolean {
+  const projects = d.projects as unknown[];
+  const decisions = d.decisions as unknown[];
+  return (
+    projects.every((p) => !!p && typeof p === 'object' && PROJECT_STATUSES.has((p as Record<string, unknown>).status as string)) &&
+    decisions.every((q) => !!q && typeof q === 'object' && DECISION_KINDS.has((q as Record<string, unknown>).kind as string))
+  );
+}
+
 function looksLikeDispatch(value: unknown): value is Dispatch {
   if (!value || typeof value !== 'object') return false;
   const d = value as Record<string, unknown>;
@@ -32,7 +45,8 @@ function looksLikeDispatch(value: unknown): value is Dispatch {
     typeof d.status === 'string' &&
     Array.isArray(d.projects) &&
     Array.isArray(d.decisions) &&
-    Array.isArray(d.calls)
+    Array.isArray(d.calls) &&
+    knownParts(d)
   );
 }
 

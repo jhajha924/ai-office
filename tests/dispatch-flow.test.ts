@@ -86,10 +86,13 @@ async function oneCodeProject(route = FULL): Promise<{ e: DispatchEngine; decisi
 
 describe('路線確認決策 (spec「回答驗證」Example，code 專案原路線 analysis、spec、build、qa、release)', () => {
   it.each([
-    [{ action: 'start', route: ['build', 'qa'] }, 204, 'queued'],
-    [{ action: 'start', route: ['build'] }, 400, '改程式的專案一定要經過 6F 測試品管組'],
+    // ③b: the foreman takes a started project off the queue at once.
+    [{ action: 'start', route: ['spec', 'build', 'qa'] }, 204, 'running'],
+    // With a build stop, 4F is required too (cut ③b): the build worker needs a change.
+    [{ action: 'start', route: ['build', 'qa'] }, 400, '改程式的專案一定要經過 4F 規格企劃組'],
+    [{ action: 'start', route: ['spec', 'build'] }, 400, '改程式的專案一定要經過 6F 測試品管組'],
     [{ action: 'start', route: [] }, 400, MESSAGES.emptyRoute],
-    [{ action: 'start', route: ['build', 'qa', 'marketing'] }, 400, MESSAGES.foreignStop],
+    [{ action: 'start', route: ['spec', 'build', 'qa', 'marketing'] }, 400, MESSAGES.foreignStop],
     [{ action: 'cancel' }, 204, 'cancelled'],
   ] as const)('%j → %s %s', async (body, status, expected) => {
     const { e, decision } = await oneCodeProject();
@@ -110,19 +113,21 @@ describe('路線確認決策 (spec「回答驗證」Example，code 專案原路�
     expect(e.answer(decision, { action: 'cancel' })).toMatchObject({ ok: false, status: 404 });
   });
 
-  it('刪站後開工 (Scenario)：route 依樓層重排，沒有新的 claude 程序', async () => {
+  it('刪站後開工 (Scenario)：route 依樓層重排，接著叫的是第一站的組員（③b）', async () => {
     const runner = new ScriptedRunner([ok({ projects: [codeProject('作品集頁面')] })], [ok(FULL)]);
     const e = engine(runner);
     e.submit('相簿網站加一頁作品集');
     await e.idle();
     const decision = e.dispatches[0].decisions.find((q) => q.kind === 'confirm')!.id;
     const before = runner.calls.length;
-    expect(e.answer(decision, { action: 'start', route: ['release', 'build', 'qa'] })).toEqual({ ok: true });
+    expect(e.answer(decision, { action: 'start', route: ['release', 'spec', 'build', 'qa'] })).toEqual({ ok: true });
     await e.idle();
     const project = e.dispatches[0].projects[0];
-    expect(project.status).toBe('queued');
-    expect(project.route.map((s) => s.id)).toEqual(['build', 'qa', 'release']);
-    expect(runner.calls.length).toBe(before);
+    expect(project.startedAt).toBeTypeOf('number');
+    expect(project.route.map((s) => s.id)).toEqual(['spec', 'build', 'qa', 'release']);
+    // No president or manager is called again; the next call is the build stop's worker.
+    expect(runner.calls.slice(before).every((c) => c.role === 'worker')).toBe(true);
+    expect(runner.calls[before]).toMatchObject({ role: 'worker', input: { theme: 'spec' } });
   });
 
   it('研究專案開工時才建立產出資料夾', async () => {
@@ -342,6 +347,62 @@ describe('示範模式的派工', () => {
       const manager = app.store.groups.get(managerSession(d.projects[0].id))!;
       expect(manager.seat).toEqual({ kind: 'manager', office: 1 });
       expect(engine.answer(d.decisions[0].id, { action: 'start', route: ['analysis', 'release'] })).toEqual({ ok: true });
+      expect(fs.existsSync(dispatchDir)).toBe(false);
+      expect(listReal()).toEqual(before);
+    } finally {
+      await app.stop();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('示範模式跑完一個程式專案 (Scenario)：3F 提問、回答後 4F～7F 依序完成、不寫檔不叫 claude', async () => {
+    const { createApp } = await import('../server/src/app.ts');
+    const { DemoRunner } = await import('../server/src/dispatch/demoRunner.ts');
+    const waits: number[] = [];
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-office-demo-'));
+    const dispatchDir = path.join(tmp, 'projects');
+    const app = createApp({
+      port: 0,
+      config: { get: () => DEFAULT_CONFIG },
+      demo: true,
+      projectsDir: path.join(tmp, 'claude'),
+      dispatchDir,
+      runner: new DemoRunner(3_000, async (ms) => void waits.push(ms)),
+      webDir: tmp,
+      assetsDir: tmp,
+    });
+    const realProjects = path.join(os.homedir(), '.ai-office', 'projects');
+    const listReal = (): string[] => (fs.existsSync(realProjects) ? fs.readdirSync(realProjects).sort() : []);
+    const before = listReal();
+    await app.start();
+    try {
+      const engine = app.dispatch!;
+      engine.submit('相簿網站加一頁作品集');
+      await engine.idle();
+      const d = engine.dispatches[0];
+      const route = d.projects[0].route.map((s) => s.id);
+      expect(engine.answer(d.decisions[0].id, { action: 'start', route })).toEqual({ ok: true });
+      await engine.idle();
+      const project = d.projects[0];
+      expect(project.status).toBe('waiting');
+      const q = d.decisions.find((x) => x.status === 'open')!;
+      expect(q).toMatchObject({ kind: 'question', summary: '這頁要放幾件作品？', options: ['6 件', '12 件'] });
+      // The 3F worker sits on 3F while it waits.
+      expect(app.store.groups.get(project.sessionId!)?.seat).toEqual({ kind: 'station', level: 3 });
+      expect(engine.answer(q.id, { action: 'answer', text: '12 件' })).toEqual({ ok: true });
+      await engine.idle();
+      // 6F asks which check to run before its worker starts.
+      const qa = d.decisions.find((x) => x.status === 'open')!;
+      expect(qa).toMatchObject({ kind: 'qa', summary: '6F 測試品管要跑哪一種檢查？' });
+      expect(engine.answer(qa.id, { action: 'qa', mode: 'verify' })).toEqual({ ok: true });
+      await engine.idle();
+      expect(project.status).toBe('done');
+      expect(project.change).toBe('demo-portfolio');
+      const stops = d.calls.filter((c) => c.role === 'worker').map((c) => c.stop);
+      expect(stops).toEqual(['analysis', 'analysis', 'spec', 'build', 'qa', 'release']);
+      expect(waits.every((ms) => ms === 3_000)).toBe(true);
+      expect(waits).toHaveLength(2 + 6);
+      expect(d.calls.every((c) => c.usage?.turns === 0)).toBe(true);
       expect(fs.existsSync(dispatchDir)).toBe(false);
       expect(listReal()).toEqual(before);
     } finally {

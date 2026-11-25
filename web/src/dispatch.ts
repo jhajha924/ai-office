@@ -1,4 +1,4 @@
-import type { DecisionView, DispatchPanelView, DispatchView, ProjectView } from '../../server/src/office/types.ts';
+import type { DecisionView, DispatchPanelView, DispatchView, ProjectView, WorkView } from '../../server/src/office/types.ts';
 import type { LevelChoice } from './levels.ts';
 import { TEXT } from './text.ts';
 
@@ -20,7 +20,8 @@ export interface ButtonModel {
 }
 
 export function buttonModel(panel: DispatchPanelView): ButtonModel {
-  const badge = panel.active?.decisions.length ?? 0;
+  // Planning decisions plus the running project's (cut ③b).
+  const badge = (panel.active?.decisions.length ?? 0) + (panel.work?.decisions.length ?? 0);
   switch (panel.status) {
     case 'off':
       return { hidden: true, disabled: true, title: '', badge: 0 };
@@ -54,15 +55,71 @@ export interface ConfirmCardModel {
 }
 
 export type DrawerModel =
-  | { kind: 'form'; building: string; recent: RecentModel[]; hint?: string }
+  | { kind: 'form'; building: string; recent: RecentModel[] }
   | { kind: 'busy'; text: string; cards: ConfirmCardModel[] }
   | { kind: 'confirm'; cards: ConfirmCardModel[] }
   | { kind: 'failed'; error: string; decision?: string; cards: ConfirmCardModel[] };
 
 export interface RecentModel {
   text: string;
-  projects: { title: string; status: string }[];
+  projects: { title: string; status: string; summary?: string }[];
   usage: string;
+}
+
+/** One open decision of the running project, as a card. */
+export type WorkCardModel =
+  | { kind: 'question'; decision: string; text: string; options: string[] }
+  | { kind: 'stuck'; decision: string; text: string; canSkip: boolean }
+  | { kind: 'rejected'; decision: string; text: string; findings: string[] }
+  | { kind: 'blocked'; decision: string; text: string }
+  | { kind: 'qa'; decision: string; text: string; choices: { mode: 'review' | 'verify' | 'both'; label: string }[] };
+
+/** The 執行中 block on top of the drawer (cut ③b). */
+export interface WorkModel {
+  project: string;
+  /** 「<專案標題>：<樓層> <部門名>（第 n／共 m 站）」 */
+  line: string;
+  waiting: boolean;
+  cards: WorkCardModel[];
+}
+
+export function workModel(work: WorkView | undefined): WorkModel | undefined {
+  if (!work) return undefined;
+  const { stop } = work;
+  const cards: WorkCardModel[] = [];
+  for (const q of work.decisions) {
+    if (q.kind === 'question') cards.push({ kind: 'question', decision: q.id, text: q.summary, options: q.options ?? [] });
+    else if (q.kind === 'stuck') cards.push({ kind: 'stuck', decision: q.id, text: q.summary, canSkip: !stop.required });
+    else if (q.kind === 'rejected') cards.push({ kind: 'rejected', decision: q.id, text: q.summary, findings: q.findings ?? [] });
+    else if (q.kind === 'blocked') cards.push({ kind: 'blocked', decision: q.id, text: q.summary });
+    else if (q.kind === 'qa') cards.push({ kind: 'qa', decision: q.id, text: q.summary, choices: TEXT.dispatchQaChoices.map((c) => ({ ...c })) });
+  }
+  return {
+    project: work.project,
+    line: TEXT.dispatchWorkLine(work.title, stop.level, stop.name, stop.index, stop.total),
+    waiting: work.status === 'waiting',
+    cards,
+  };
+}
+
+/** What 最近的交辦 says about one project. */
+export function projectStatusText(p: ProjectView): string {
+  switch (p.status) {
+    case 'queued':
+      return p.ahead ? TEXT.dispatchQueuedAhead(p.ahead) : TEXT.dispatchQueued;
+    case 'running':
+      return p.at ? TEXT.dispatchRunningAt(p.at.level, p.at.name) : TEXT.dispatchRunning;
+    case 'waiting':
+      return TEXT.dispatchWaiting;
+    case 'done':
+      return TEXT.dispatchDone;
+    case 'stopped':
+      return TEXT.dispatchStopped;
+    case 'cancelled':
+      return TEXT.dispatchCancelled;
+    default:
+      return '';
+  }
 }
 
 export function confirmCards(active: DispatchView, removed: ReadonlyMap<string, ReadonlySet<string>> = new Map()): ConfirmCardModel[] {
@@ -105,14 +162,12 @@ export function recentModel(dispatch: DispatchView): RecentModel {
     text: dispatch.text,
     projects: dispatch.projects.map((p) => ({
       title: p.title,
-      status: p.status === 'queued' ? TEXT.dispatchQueued : p.status === 'cancelled' ? TEXT.dispatchCancelled : '',
+      status: projectStatusText(p),
+      ...(p.status === 'done' && p.summary ? { summary: p.summary } : {}),
     })),
     usage: TEXT.dispatchUsage(dispatch.usage.turns, Math.round(dispatch.usage.durationMs / 1000)),
   };
 }
-
-/** Shown under 最近的交辦 while something is queued: 開工 does not start the floors yet (③b). */
-export const QUEUED_HINT = TEXT.dispatchQueuedHint;
 
 export interface ViewPlace {
   building: string;
@@ -131,11 +186,7 @@ export function viewAfterDispatch(current: ViewPlace, dispatchBuilding: string, 
 
 export function drawerModel(panel: DispatchPanelView, removed: ReadonlyMap<string, ReadonlySet<string>> = new Map()): DrawerModel {
   const active = panel.active;
-  if (!active) {
-    const form: DrawerModel = { kind: 'form', building: panel.building ?? '', recent: panel.recent.map(recentModel) };
-    const queued = panel.recent.some((d) => d.projects.some((p) => p.status === 'queued'));
-    return queued ? { ...form, hint: QUEUED_HINT } : form;
-  }
+  if (!active) return { kind: 'form', building: panel.building ?? '', recent: panel.recent.map(recentModel) };
   const cards = confirmCards(active, removed);
   switch (active.status) {
     case 'president':
@@ -175,6 +226,8 @@ export class DispatchPanel {
   /** Stops the user took off, per project, until 開工. */
   private readonly removed = new Map<string, Set<string>>();
   private draft = '';
+  /** Unsent answers to worker questions, by decision. */
+  private readonly answers = new Map<string, string>();
   private message = '';
   private open = false;
   private lastKey = '';
@@ -208,10 +261,14 @@ export class DispatchPanel {
     if (!this.open) return;
     // Redraw only when what the drawer shows changed, so typing is never interrupted.
     const model = drawerModel(this.panel, this.removed);
-    const key = JSON.stringify([model, this.message]);
+    const work = workModel(this.panel.work);
+    const key = JSON.stringify([model, work, this.message]);
     if (!force && key === this.lastKey) return;
     this.lastKey = key;
-    this.drawer.replaceChildren(...this.drawerNodes(model));
+    const nodes = this.drawerNodes(model);
+    // The running project's block goes right under the title (and any message).
+    if (work) nodes.splice(this.message ? 2 : 1, 0, this.workNode(work));
+    this.drawer.replaceChildren(...nodes);
   }
 
   private drawerNodes(model: DrawerModel): HTMLElement[] {
@@ -246,12 +303,14 @@ export class DispatchPanel {
       nodes.push(form);
       if (model.recent.length > 0) {
         nodes.push(el('h3', '', TEXT.dispatchRecent));
-        if (model.hint) nodes.push(el('p', 'dispatch-hint', model.hint));
         const list = el('ul', 'dispatch-recent');
         for (const r of model.recent) {
           const item = el('li');
           item.append(el('div', 'recent-text', r.text));
-          for (const p of r.projects) item.append(el('div', 'recent-project', `${p.title}：${p.status}`));
+          for (const p of r.projects) {
+            item.append(el('div', 'recent-project', `${p.title}：${p.status}`));
+            if (p.summary) item.append(el('div', 'recent-summary', p.summary));
+          }
           item.append(el('div', 'recent-usage', r.usage));
           list.append(item);
         }
@@ -307,6 +366,77 @@ export class DispatchPanel {
     return node;
   }
 
+  private workNode(work: WorkModel): HTMLElement {
+    const box = el('section', work.waiting ? 'dispatch-work waiting' : 'dispatch-work');
+    const head = el('div', 'work-head');
+    head.append(el('h3', '', TEXT.dispatchWorkTitle));
+    const stop = el('button', 'dispatch-action work-stop', TEXT.dispatchStop);
+    stop.type = 'button';
+    stop.addEventListener('click', () => {
+      if (!window.confirm(TEXT.dispatchStopConfirm)) return;
+      stop.disabled = true;
+      void this.post(`/api/projects/${work.project}/stop`, {});
+    });
+    head.append(stop);
+    box.append(head, el('p', 'work-line', work.line));
+    for (const card of work.cards) box.append(this.workCard(card));
+    return box;
+  }
+
+  private workCard(card: WorkCardModel): HTMLElement {
+    const node = el('div', `work-card ${card.kind}`);
+    node.append(el('p', 'work-card-text', card.text));
+    const actions = el('div', 'confirm-actions');
+    const answer = (body: unknown) => () => this.answer(card.decision, body);
+    switch (card.kind) {
+      case 'question': {
+        const area = el('textarea');
+        area.rows = 3;
+        area.maxLength = TEXT_MAX;
+        area.placeholder = TEXT.dispatchAnswerPlaceholder;
+        area.value = this.answers.get(card.decision) ?? '';
+        area.addEventListener('input', () => this.answers.set(card.decision, area.value));
+        if (card.options.length > 0) {
+          const options = el('div', 'work-options');
+          for (const option of card.options) {
+            const b = el('button', 'dispatch-option', option);
+            b.type = 'button';
+            b.addEventListener('click', () => {
+              area.value = option;
+              this.answers.set(card.decision, option);
+            });
+            options.append(b);
+          }
+          node.append(options);
+        }
+        node.append(area);
+        actions.append(this.action(TEXT.dispatchAnswer, 'primary', () => this.answer(card.decision, { action: 'answer', text: area.value })));
+        break;
+      }
+      case 'stuck':
+        actions.append(this.action(TEXT.dispatchRetry, 'primary', answer({ action: 'retry' })));
+        if (card.canSkip) actions.append(this.action(TEXT.dispatchSkip, '', answer({ action: 'skip' })));
+        break;
+      case 'rejected': {
+        const list = el('ul', 'done-when');
+        for (const f of card.findings) list.append(el('li', '', f));
+        node.append(list);
+        actions.append(this.action(TEXT.dispatchRedo, 'primary', answer({ action: 'redo' })), this.action(TEXT.dispatchAccept, '', answer({ action: 'accept' })));
+        break;
+      }
+      case 'blocked':
+        actions.append(this.action(TEXT.dispatchRetry, 'primary', answer({ action: 'retry' })));
+        break;
+      case 'qa':
+        // One button per check; the label says in Chinese what it does.
+        actions.classList.add('qa-choices');
+        for (const choice of card.choices) actions.append(this.action(choice.label, choice.mode === 'both' ? 'primary' : '', answer({ action: 'qa', mode: choice.mode })));
+        break;
+    }
+    node.append(actions);
+    return node;
+  }
+
   private action(text: string, className: string, run: () => Promise<void>): HTMLButtonElement {
     const b = el('button', className ? `dispatch-action ${className}` : 'dispatch-action', text);
     b.type = 'button';
@@ -335,6 +465,13 @@ export class DispatchPanel {
 
   private async answer(decision: string, body: unknown): Promise<void> {
     const error = await postJson(`/api/decisions/${decision}`, body);
+    if (!error) this.answers.delete(decision);
+    this.message = error ?? '';
+    this.render(true);
+  }
+
+  private async post(url: string, body: unknown): Promise<void> {
+    const error = await postJson(url, body);
     this.message = error ?? '';
     this.render(true);
   }

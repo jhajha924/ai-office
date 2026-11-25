@@ -19,8 +19,32 @@ const MAX_STDOUT = 4 * 1024 * 1024;
 
 export const READ_ONLY_TOOLS = 'Read,Glob,Grep';
 
-/** The full argument list for one call. */
-export function claudeArgs(request: Pick<AgentRequest, 'model' | 'schema'>): string[] {
+/**
+ * The full argument list for one call. Workers (cut ③b) get their own tool
+ * list, a turn cap and a session the transcript observer can see and a later
+ * call can resume; the president and managers stay read-only and unsaved.
+ */
+export function claudeArgs(request: Pick<AgentRequest, 'model' | 'schema'> & Partial<AgentRequest>): string[] {
+  if (request.role === 'worker') {
+    if (!request.sessionId || !request.tools) throw new Error('worker call without session or tools');
+    return [
+      '-p',
+      '--output-format',
+      'json',
+      '--json-schema',
+      JSON.stringify(request.schema),
+      '--model',
+      request.model,
+      '--permission-mode',
+      'dontAsk',
+      '--allowedTools',
+      request.tools,
+      '--max-turns',
+      String(request.maxTurns ?? 150),
+      request.resume ? '--resume' : '--session-id',
+      request.sessionId,
+    ];
+  }
   return [
     '-p',
     '--output-format',
@@ -37,7 +61,7 @@ export function claudeArgs(request: Pick<AgentRequest, 'model' | 'schema'>): str
   ];
 }
 
-const ROLE_NAME = { president: '總裁', manager: '經理' } as const;
+const ROLE_NAME = { president: '總裁', manager: '經理', worker: '組員' } as const;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -84,20 +108,27 @@ export interface ClaudeRunnerOptions {
 
 export class ClaudeRunner implements AgentRunner {
   private readonly options: ClaudeRunnerOptions;
+  /** Worker programs by session, so 停止專案 can end one. */
+  private readonly live = new Map<string, () => void>();
 
   constructor(options: ClaudeRunnerOptions) {
     this.options = options;
   }
 
+  cancel(sessionId: string): void {
+    this.live.get(sessionId)?.();
+  }
+
   run(request: AgentRequest): Promise<RunResult> {
     const who = ROLE_NAME[request.role];
-    const timeoutMs = this.options.timeoutMs ?? CALL_TIMEOUT_MS;
+    const timeoutMs = request.timeoutMs ?? this.options.timeoutMs ?? CALL_TIMEOUT_MS;
     return new Promise((resolve) => {
       let settled = false;
       const finish = (result: RunResult): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (request.sessionId) this.live.delete(request.sessionId);
         resolve(result);
       };
       let child: ReturnType<typeof spawn>;
@@ -116,6 +147,12 @@ export class ClaudeRunner implements AgentRunner {
         child.kill();
         finish({ ok: false, reason: `${who}逾時` });
       }, timeoutMs);
+      if (request.sessionId) {
+        this.live.set(request.sessionId, () => {
+          child.kill();
+          finish({ ok: false, reason: `${who}已停止` });
+        });
+      }
       let stdout = '';
       let tooBig = false;
       child.stdout!.setEncoding('utf-8');

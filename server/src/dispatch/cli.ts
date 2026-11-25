@@ -123,3 +123,34 @@ export async function checkAvailability(
   if (!speclinkOk) return { status: 'missing-speclink' };
   return { status: 'ready', claude, speclink };
 }
+
+/**
+ * Does a code project's folder use speclink? It needs an openspec folder and
+ * `speclink list --json` must succeed there (no shell, 10 seconds).
+ */
+export function speclinkReady(speclink: string): (cwd: string) => Promise<boolean> {
+  return (cwd) =>
+    new Promise((resolve) => {
+      if (!fs.existsSync(path.join(cwd, 'openspec'))) return resolve(false);
+      let settled = false;
+      const done = (ok: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(ok);
+      };
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(speclink, ['list', '--json'], { cwd, shell: false, stdio: 'ignore', windowsHide: true });
+      } catch {
+        resolve(false);
+        return;
+      }
+      const timer = setTimeout(() => {
+        child.kill();
+        done(false);
+      }, VERSION_TIMEOUT_MS);
+      child.on('error', () => done(false));
+      child.on('exit', (code) => done(code === 0));
+    });
+}

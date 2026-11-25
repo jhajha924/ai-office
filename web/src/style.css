@@ -331,5 +331,17 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .dispatch-recent { list-style: none; padding: 0; margin: 0; font-size: 13px; }
 .dispatch-recent li { border-top: 1px solid var(--line); padding: 6px 0; }
 .recent-text { font-weight: 700; }
-.dispatch-hint { margin: 0 0 8px; padding: 6px 10px; border-radius: 6px; background: #fff7ed; color: #9a3412; font-size: 13px; line-height: 1.5; }
+.recent-summary { color: var(--muted, #666); font-size: 12px; margin-top: 2px; }
+.dispatch-work { border: 1px solid #c7d2fe; background: #eef2ff; border-radius: 8px; padding: 8px 10px; margin: 0 0 12px; }
+.dispatch-work.waiting { border-color: #fdba74; background: #fff7ed; }
+.work-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.work-head h3 { margin: 0; font-size: 14px; }
+.work-line { margin: 4px 0 6px; font-size: 13px; }
+.work-card { border-top: 1px solid rgba(0, 0, 0, 0.08); padding-top: 6px; margin-top: 6px; }
+.work-card-text { margin: 0 0 6px; font-size: 13px; line-height: 1.5; }
+.work-card textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; }
+.work-options { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.confirm-actions.qa-choices { flex-direction: column; align-items: stretch; }
+.confirm-actions.qa-choices .dispatch-action { text-align: left; white-space: normal; }
+.dispatch-option { border: 1px solid #fdba74; background: #fff; border-radius: 999px; padding: 2px 10px; cursor: pointer; font-size: 12px; }
 .recent-usage { color: var(--muted); font-size: 12px; }
